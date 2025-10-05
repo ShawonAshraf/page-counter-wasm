@@ -41,3 +41,14 @@ pub struct EstimateOptions {
     /// rows per page for spreadsheets
     pub rows_per_page: Option<usize>,
 }
+
+impl Default for crate::EstimateOptions {
+    fn default() -> Self {
+        Self {
+            default_paper: Some("A4".into()),
+            custom_paper_mm: None,
+            chars_per_page: None,
+            rows_per_page: None,
+        }
+    }
+}
