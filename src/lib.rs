@@ -1,4 +1,5 @@
 mod schema;
+mod size_utils;
 
 use wasm_bindgen::prelude::*;
 use serde::{Serialize, Deserialize};
@@ -13,19 +14,8 @@ use calamine::{Reader, Xlsx, Data};
 use std::io::Cursor;
 use base64::Engine;
 use schema::{EstimateResult, EstimateOptions, PageSizeMm, EstimatorError};
+use size_utils::{mm_from_pt, a4_mm, letter_mm};
 
-fn mm_from_pt(pt: f64) -> f64 {
-    // 1 point = 1/72 inch; 1 inch = 25.4 mm
-    pt / 72.0 * 25.4
-}
-
-fn a4_mm() -> (f64, f64) {
-    (210.0, 297.0)
-}
-
-fn letter_mm() -> (f64, f64) {
-    (215.9, 279.4)
-}
 
 /// detect mime-like type from filename or magic bytes
 fn detect_type(filename: Option<&str>, bytes: &[u8]) -> String {
