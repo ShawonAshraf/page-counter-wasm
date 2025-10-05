@@ -38,8 +38,19 @@ pub fn detect_type(filename: Option<&str>, bytes: &[u8]) -> String {
         return "xlsx".into();
     }
     // crude text detection: printable
-    if bytes.iter().all(|b| *b == 9 || *b == 10 || *b == 13 || (32..=127).contains(b)) {
+    if bytes
+        .iter()
+        .all(|b| *b == 9 || *b == 10 || *b == 13 || (32..=127).contains(b))
+    {
         return "txt".into();
     }
     "unknown".into()
+}
+
+pub fn obj_to_f64(obj: &lopdf::Object) -> f64 {
+    match obj {
+        lopdf::Object::Integer(i) => *i as f64,
+        lopdf::Object::Real(r) => *r as f64,
+        _ => 0.0,
+    }
 }
