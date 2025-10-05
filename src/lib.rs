@@ -1,5 +1,5 @@
 mod schema;
-mod size_utils;
+mod file_utils;
 
 use wasm_bindgen::prelude::*;
 use serde::{Serialize, Deserialize};
@@ -14,41 +14,10 @@ use calamine::{Reader, Xlsx, Data};
 use std::io::Cursor;
 use base64::Engine;
 use schema::{EstimateResult, EstimateOptions, PageSizeMm, EstimatorError};
-use size_utils::{mm_from_pt, a4_mm, letter_mm};
+use file_utils::{mm_from_pt, a4_mm, letter_mm, detect_type};
 
 
-/// detect mime-like type from filename or magic bytes
-fn detect_type(filename: Option<&str>, bytes: &[u8]) -> String {
-    if let Some(name) = filename {
-        let lower = name.to_lowercase();
-        if lower.ends_with(".pdf") {
-            return "pdf".into();
-        }
-        if lower.ends_with(".xlsx") || lower.ends_with(".xlsm") {
-            return "xlsx".into();
-        }
-        if lower.ends_with(".md") || lower.ends_with(".markdown") {
-            return "markdown".into();
-        }
-        if lower.ends_with(".txt") {
-            return "txt".into();
-        }
-    }
-    // fallback: magic
-    if bytes.len() >= 4 && &bytes[0..4] == b"%PDF" {
-        return "pdf".into();
-    }
-    // xlsx is a zip with PK
-    if bytes.len() >= 4 && &bytes[0..2] == b"PK" {
-        // assume xlsx (could be other zip types)
-        return "xlsx".into();
-    }
-    // crude text detection: printable
-    if bytes.iter().all(|b| *b == 9 || *b == 10 || *b == 13 || (32..=127).contains(b)) {
-        return "txt".into();
-    }
-    "unknown".into()
-}
+
 
 fn estimate_text_pages(bytes: &[u8], options: &EstimateOptions) -> EstimateResult {
     let s = match std::str::from_utf8(bytes) {
