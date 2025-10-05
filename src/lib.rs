@@ -7,7 +7,7 @@ use thiserror::Error;
 use lopdf::Document as LopdfDocument;
 
 // XLSX parsing
-use calamine::{Reader, Xlsx, DataType};
+use calamine::{Reader, Xlsx, Data};
 use std::io::Cursor;
 
 #[derive(Debug, Error)]
@@ -22,7 +22,7 @@ enum EstimatorError {
     General(String),
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct PageSizeMm {
     pub width_mm: f64,
     pub height_mm: f64,
@@ -169,25 +169,28 @@ fn estimate_xlsx_pages(bytes: &[u8], options: &EstimateOptions) -> Result<Estima
     let mut per_page_sizes = Vec::new();
 
     for sheet_name in xlsx.sheet_names().to_owned() {
-        if let Some(Ok(range)) = xlsx.worksheet_range(&sheet_name) {
-            // count non-empty rows
-            let mut last_row_index = 0usize;
-            for (ridx, row) in range.rows().enumerate() {
-                // treat row as non-empty if any cell non-empty
-                if row.iter().any(|c| !matches!(c, DataType::Empty)) {
-                    last_row_index = ridx + 1;
+        match xlsx.worksheet_range(&sheet_name) {
+            Ok(range) => {
+                // count non-empty rows
+                let mut last_row_index = 0usize;
+                for (ridx, row) in range.rows().enumerate() {
+                    // treat row as non-empty if any cell non-empty
+                    if row.iter().any(|c| !matches!(c, Data::Empty)) {
+                        last_row_index = ridx + 1;
+                    }
+                }
+                let pages_for_sheet = (last_row_index + rows_per_page - 1) / rows_per_page;
+                if pages_for_sheet > 0 {
+                    total_pages += pages_for_sheet;
+                    per_page_sizes.extend(std::iter::repeat(PageSizeMm { width_mm: w, height_mm: h }).take(pages_for_sheet));
+                    notes.push(format!("Sheet '{}' rows: {}, pages: {}", sheet_name, last_row_index, pages_for_sheet));
+                } else {
+                    notes.push(format!("Sheet '{}' empty; 0 pages", sheet_name));
                 }
             }
-            let pages_for_sheet = (last_row_index + rows_per_page - 1) / rows_per_page;
-            if pages_for_sheet > 0 {
-                total_pages += pages_for_sheet;
-                per_page_sizes.extend(std::iter::repeat(PageSizeMm { width_mm: w, height_mm: h }).take(pages_for_sheet));
-                notes.push(format!("Sheet '{}' rows: {}, pages: {}", sheet_name, last_row_index, pages_for_sheet));
-            } else {
-                notes.push(format!("Sheet '{}' empty; 0 pages", sheet_name));
+            Err(_) => {
+                notes.push(format!("Could not read sheet '{}'", sheet_name));
             }
-        } else {
-            notes.push(format!("Could not read sheet '{}'", sheet_name));
         }
     }
 
@@ -203,22 +206,17 @@ fn estimate_xlsx_pages(bytes: &[u8], options: &EstimateOptions) -> Result<Estima
     })
 }
 
-fn estimate_pdf_pages(bytes: &[u8], options: &EstimateOptions) -> Result<EstimateResult, EstimatorError> {
+fn estimate_pdf_pages(bytes: &[u8], _options: &EstimateOptions) -> Result<EstimateResult, EstimatorError> {
     // parse with lopdf
     let doc = LopdfDocument::load_mem(bytes)
         .map_err(|e| EstimatorError::PdfError(format!("{:?}", e)))?;
 
-    let pages_tree = doc.get_pages(); // HashMap of page_num -> object id
+    let pages_tree = doc.get_pages(); // BTreeMap of page_num -> object id
     let mut page_sizes = Vec::new();
     let mut notes = Vec::new();
 
-    for (pnum, (_page_id, dict)) in pages_tree.iter().enumerate() {
-        // dict is the page dict (lopdf returns object id and dict)
+    for (pnum, page_id) in pages_tree.iter() {
         // We'll try to read MediaBox or CropBox if possible via the page object
-        // Unfortunately get_pages returns object ids; use doc.get_object
-        let (_, page_obj) = doc.get_object(dict).unwrap_or((&lopdf::Object::Null, &lopdf::Object::Null));
-        // fallback: look up page object via page id
-        // Simpler: use doc.get_page_content? But page boxes are in the page dict. Use doc.get_media_box(page_id) is not available.
         // We'll attempt retrieving the object and extracting MediaBox or use default 595x842 points (A4 ~ 595x842 points)
         // Safe fallback values:
         let default_pts = (595.0_f64, 842.0_f64); // ~A4 in points (close)
@@ -226,28 +224,28 @@ fn estimate_pdf_pages(bytes: &[u8], options: &EstimateOptions) -> Result<Estimat
         let mut height_pts = default_pts.1;
 
         // try to get MediaBox from the page dictionary
-        if let Ok((_, obj)) = doc.get_object(dict) {
-            if let lopdf::Object::Dictionary(ref page_dict) = obj {
-                if let Some(mediabox_obj) = page_dict.get(b"MediaBox") {
+        if let Ok(obj) = doc.get_object(*page_id) {
+            if let lopdf::Object::Dictionary(page_dict) = obj {
+                if let Ok(mediabox_obj) = page_dict.get(b"MediaBox") {
                     if let lopdf::Object::Array(vals) = mediabox_obj {
                         // array of four numbers: [llx, lly, urx, ury]
                         if vals.len() == 4 {
                             // attempt converting to f64
-                            let x0 = vals[0].as_f64().unwrap_or(0.0);
-                            let y0 = vals[1].as_f64().unwrap_or(0.0);
-                            let x1 = vals[2].as_f64().unwrap_or(x0);
-                            let y1 = vals[3].as_f64().unwrap_or(y0);
+                            let x0 = obj_to_f64(&vals[0]);
+                            let y0 = obj_to_f64(&vals[1]);
+                            let x1 = obj_to_f64(&vals[2]);
+                            let y1 = obj_to_f64(&vals[3]);
                             width_pts = (x1 - x0).abs();
                             height_pts = (y1 - y0).abs();
                         }
                     }
-                } else if let Some(cropbox_obj) = page_dict.get(b"CropBox") {
+                } else if let Ok(cropbox_obj) = page_dict.get(b"CropBox") {
                     if let lopdf::Object::Array(vals) = cropbox_obj {
                         if vals.len() == 4 {
-                            let x0 = vals[0].as_f64().unwrap_or(0.0);
-                            let y0 = vals[1].as_f64().unwrap_or(0.0);
-                            let x1 = vals[2].as_f64().unwrap_or(x0);
-                            let y1 = vals[3].as_f64().unwrap_or(y0);
+                            let x0 = obj_to_f64(&vals[0]);
+                            let y0 = obj_to_f64(&vals[1]);
+                            let x1 = obj_to_f64(&vals[2]);
+                            let y1 = obj_to_f64(&vals[3]);
                             width_pts = (x1 - x0).abs();
                             height_pts = (y1 - y0).abs();
                         }
@@ -259,7 +257,7 @@ fn estimate_pdf_pages(bytes: &[u8], options: &EstimateOptions) -> Result<Estimat
         let width_mm = mm_from_pt(width_pts);
         let height_mm = mm_from_pt(height_pts);
         page_sizes.push(PageSizeMm { width_mm, height_mm });
-        notes.push(format!("Page {}: {:.2} x {:.2} mm", pnum+1, width_mm, height_mm));
+        notes.push(format!("Page {}: {:.2} x {:.2} mm", *pnum as usize, width_mm, height_mm));
     }
 
     let page_count = page_sizes.len();
@@ -275,20 +273,20 @@ fn estimate_pdf_pages(bytes: &[u8], options: &EstimateOptions) -> Result<Estimat
 pub fn estimate_document_base64(base64_bytes: &str, filename: Option<String>, options_json: Option<String>) -> JsValue {
     // convenience wrapper to allow passing base64 bytes from JS (where typed arrays may not be handy)
     match base64::decode(base64_bytes) {
-        Ok(bytes) => estimate_document(&bytes, filename.as_deref(), options_json),
-        Err(e) => JsValue::from_serde(&json!({"error": format!("base64 decode failed: {:?}", e)})).unwrap(),
+        Ok(bytes) => estimate_document(&bytes, filename, options_json),
+        Err(e) => JsValue::from_str(&json!({"error": format!("base64 decode failed: {:?}", e)}).to_string()),
     }
 }
 
 #[wasm_bindgen]
-pub fn estimate_document(bytes: &[u8], filename: Option<&str>, options_json: Option<String>) -> JsValue {
+pub fn estimate_document(bytes: &[u8], filename: Option<String>, options_json: Option<String>) -> JsValue {
     // parse options
     let options: EstimateOptions = match options_json {
         Some(s) => serde_json::from_str(&s).unwrap_or_default(),
         None => EstimateOptions::default(),
     };
 
-    let detected = detect_type(filename, bytes);
+    let detected = detect_type(filename.as_deref(), bytes);
 
     let result = match detected.as_str() {
         "pdf" => match estimate_pdf_pages(bytes, &options) {
@@ -305,7 +303,21 @@ pub fn estimate_document(bytes: &[u8], filename: Option<&str>, options_json: Opt
     };
 
     match result {
-        Ok(est) => JsValue::from_serde(&est).unwrap_or(JsValue::from_serde(&json!({"error":"serialization failed"})).unwrap()),
-        Err(errmsg) => JsValue::from_serde(&json!({"error": errmsg, "detected": detected})).unwrap(),
+        Ok(est) => {
+            match serde_json::to_string(&est) {
+                Ok(s) => JsValue::from_str(&s),
+                Err(_) => JsValue::from_str(&json!({"error":"serialization failed"}).to_string()),
+            }
+        }
+        Err(errmsg) => JsValue::from_str(&json!({"error": errmsg, "detected": detected}).to_string()),
+    }
+}
+
+
+fn obj_to_f64(obj: &lopdf::Object) -> f64 {
+    match obj {
+        lopdf::Object::Integer(i) => *i as f64,
+        lopdf::Object::Real(r) => *r as f64,
+        _ => 0.0,
     }
 }
