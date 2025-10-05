@@ -42,7 +42,7 @@ pub struct EstimateOptions {
     pub rows_per_page: Option<usize>,
 }
 
-impl Default for crate::EstimateOptions {
+impl Default for EstimateOptions {
     fn default() -> Self {
         Self {
             default_paper: Some("A4".into()),
