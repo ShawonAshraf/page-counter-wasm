@@ -9,6 +9,7 @@ use lopdf::Document as LopdfDocument;
 // XLSX parsing
 use calamine::{Reader, Xlsx, Data};
 use std::io::Cursor;
+use base64::Engine;
 
 #[derive(Debug, Error)]
 enum EstimatorError {
@@ -272,7 +273,7 @@ fn estimate_pdf_pages(bytes: &[u8], _options: &EstimateOptions) -> Result<Estima
 #[wasm_bindgen]
 pub fn estimate_document_base64(base64_bytes: &str, filename: Option<String>, options_json: Option<String>) -> JsValue {
     // convenience wrapper to allow passing base64 bytes from JS (where typed arrays may not be handy)
-    match base64::decode(base64_bytes) {
+    match base64::engine::general_purpose::STANDARD.decode(base64_bytes) {
         Ok(bytes) => estimate_document(&bytes, filename, options_json),
         Err(e) => JsValue::from_str(&json!({"error": format!("base64 decode failed: {:?}", e)}).to_string()),
     }
