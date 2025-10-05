@@ -24,7 +24,7 @@ pub struct EstimateResult {
     /// estimated total page count
     pub page_count: usize,
     /// per-page sizes when known (PDF), otherwise inferred default size repeated
-    pub page_sizes: Vec<crate::PageSizeMm>,
+    pub page_sizes: Vec<PageSizeMm>,
     /// textual explanation / notes
     pub notes: Vec<String>,
 }
