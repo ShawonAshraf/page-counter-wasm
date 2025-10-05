@@ -1,6 +1,7 @@
 use crate::file_utils::{a4_mm, letter_mm, mm_from_pt, obj_to_f64};
 use crate::schema::{EstimateOptions, EstimateResult, EstimatorError, PageSizeMm};
-use calamine::Xlsx;
+use calamine::{Data, Reader, Xlsx};
+use lopdf::Document as LopdfDocument;
 use std::io::Cursor;
 
 pub fn estimate_text_pages(bytes: &[u8], options: &EstimateOptions) -> EstimateResult {
@@ -51,7 +52,7 @@ pub fn estimate_text_pages(bytes: &[u8], options: &EstimateOptions) -> EstimateR
 }
 
 pub fn estimate_markdown_pages(bytes: &[u8], options: &EstimateOptions) -> EstimateResult {
-    // for now treat markdown similar to text (could parse headings and images later)
+    // for now treat markdown text similar to text (could parse headings and images later)
     let mut res = estimate_text_pages(bytes, options);
     res.notes
         .push("Markdown parsed as text; images/embedded content not considered.".into());
