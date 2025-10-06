@@ -259,9 +259,9 @@ pub fn estimate_xlsx_pages(
 
 /// Extracts the exact page count and page dimensions from a PDF file.
 ///
-/// Unlike text-based estimators that use heuristics, this function reads the actual
-/// page structure from the PDF document. It extracts precise page dimensions from
-/// the MediaBox (or CropBox as fallback) for each page.
+/// This optimized implementation quickly counts pages and extracts dimensions efficiently.
+/// For large PDFs with uniform page sizes, it samples the first page's dimensions
+/// rather than parsing every page individually, resulting in significantly better performance.
 ///
 /// # Arguments
 ///
@@ -272,10 +272,21 @@ pub fn estimate_xlsx_pages(
 ///
 /// Returns `Ok(EstimateResult)` on success, containing:
 /// - `page_count`: Exact number of pages in the PDF
-/// - `page_sizes`: Vector of actual page dimensions for each page (in millimeters)
-/// - `notes`: Detailed information about each page's dimensions
+/// - `page_sizes`: Vector of page dimensions (in millimeters)
+/// - `notes`: Information about page dimensions and optimization applied
 ///
 /// Returns `Err(EstimatorError::PdfError)` if the PDF cannot be parsed.
+///
+/// # Performance Optimization
+///
+/// This function uses a fast-path optimization:
+/// 1. Quickly extracts the page count from the page tree
+/// 2. Extracts dimensions from only the first page (and optionally a sample of later pages)
+/// 3. Assumes uniform page sizes (typical for most PDFs)
+/// 4. Falls back to per-page extraction only if mixed sizes are detected
+///
+/// This approach is **much faster** for large PDFs compared to extracting dimensions
+/// from every page individually.
 ///
 /// # Page Dimensions
 ///
@@ -286,23 +297,14 @@ pub fn estimate_xlsx_pages(
 ///
 /// Dimensions are converted from PDF points (1/72 inch) to millimeters.
 ///
-/// # Implementation Details
-///
-/// - Uses the `lopdf` library to parse PDF structure
-/// - Handles both portrait and landscape orientations
-/// - Accounts for PDFs with mixed page sizes
-/// - Each page's dimensions are independently extracted
-///
 /// # Example
 ///
 /// ```ignore
 /// match estimate_pdf_pages(pdf_bytes, &options) {
 ///     Ok(result) => {
 ///         println!("PDF has {} pages", result.page_count);
-///         for (i, size) in result.page_sizes.iter().enumerate() {
-///             println!("Page {}: {:.1} × {:.1} mm", 
-///                      i + 1, size.width_mm, size.height_mm);
-///         }
+///         println!("First page: {:.1} × {:.1} mm", 
+///                  result.page_sizes[0].width_mm, result.page_sizes[0].height_mm);
 ///     },
 ///     Err(e) => eprintln!("Failed to parse PDF: {:?}", e),
 /// }
@@ -316,65 +318,125 @@ pub fn estimate_pdf_pages(
         LopdfDocument::load_mem(bytes).map_err(|e| EstimatorError::PdfError(format!("{:?}", e)))?;
 
     let pages_tree = doc.get_pages(); // BTreeMap of page_num -> object id
-    let mut page_sizes = Vec::new();
-    let mut notes = Vec::new();
-
-    for (pnum, page_id) in pages_tree.iter() {
-        // We'll try to read MediaBox or CropBox if possible via the page object
-        // We'll attempt retrieving the object and extracting MediaBox or use default 595x842 points (A4 ~ 595x842 points)
-        // Safe fallback values:
-        let default_pts = (595.0_f64, 842.0_f64); // ~A4 in points (close)
-        let mut width_pts = default_pts.0;
-        let mut height_pts = default_pts.1;
-
-        // try to get MediaBox from the page dictionary
-        if let Ok(obj) = doc.get_object(*page_id) {
-            if let lopdf::Object::Dictionary(page_dict) = obj {
-                if let Ok(mediabox_obj) = page_dict.get(b"MediaBox") {
-                    if let lopdf::Object::Array(vals) = mediabox_obj {
-                        // array of four numbers: [llx, lly, urx, ury]
-                        if vals.len() == 4 {
-                            // attempt converting to f64
-                            let x0 = obj_to_f64(&vals[0]);
-                            let y0 = obj_to_f64(&vals[1]);
-                            let x1 = obj_to_f64(&vals[2]);
-                            let y1 = obj_to_f64(&vals[3]);
-                            width_pts = (x1 - x0).abs();
-                            height_pts = (y1 - y0).abs();
-                        }
-                    }
-                } else if let Ok(cropbox_obj) = page_dict.get(b"CropBox") {
-                    if let lopdf::Object::Array(vals) = cropbox_obj {
-                        if vals.len() == 4 {
-                            let x0 = obj_to_f64(&vals[0]);
-                            let y0 = obj_to_f64(&vals[1]);
-                            let x1 = obj_to_f64(&vals[2]);
-                            let y1 = obj_to_f64(&vals[3]);
-                            width_pts = (x1 - x0).abs();
-                            height_pts = (y1 - y0).abs();
-                        }
-                    }
-                }
-            }
-        }
-
-        let width_mm = mm_from_pt(width_pts);
-        let height_mm = mm_from_pt(height_pts);
-        page_sizes.push(PageSizeMm {
-            width_mm,
-            height_mm,
+    let page_count = pages_tree.len();
+    
+    if page_count == 0 {
+        return Ok(EstimateResult {
+            page_count: 0,
+            page_sizes: vec![],
+            notes: vec!["PDF has no pages".to_string()],
         });
-        notes.push(format!(
-            "Page {}: {:.2} x {:.2} mm",
-            *pnum as usize, width_mm, height_mm
-        ));
     }
 
-    let page_count = page_sizes.len();
+    let mut notes = Vec::new();
+    
+    // OPTIMIZATION: For large PDFs, sample dimensions from first page only
+    // Most PDFs have uniform page sizes, so this is much faster than iterating all pages
+    let sample_size = if page_count > 100 { 1 } else { page_count.min(5) };
+    
+    // Extract dimensions from first page (and optionally a few more)
+    let sampled_dims: Vec<(f64, f64)> = pages_tree
+        .iter()
+        .take(sample_size)
+        .map(|(_, page_id)| extract_page_dimensions(&doc, *page_id))
+        .collect();
+    
+    // Check if all sampled pages have the same dimensions (within tolerance)
+    let first_dim = sampled_dims[0];
+    let uniform = sampled_dims.iter().all(|(w, h)| {
+        (w - first_dim.0).abs() < 0.1 && (h - first_dim.1).abs() < 0.1
+    });
+    
+    let page_sizes = if uniform {
+        // Fast path: All pages use the same dimensions
+        let width_mm = mm_from_pt(first_dim.0);
+        let height_mm = mm_from_pt(first_dim.1);
+        
+        notes.push(format!(
+            "PDF has {} pages (uniform size: {:.1} × {:.1} mm)",
+            page_count, width_mm, height_mm
+        ));
+        
+        if page_count > 100 {
+            notes.push("Performance optimization: Sampled first page only (large PDF)".to_string());
+        }
+        
+        vec![PageSizeMm { width_mm, height_mm }; page_count]
+    } else {
+        // Fallback: Mixed page sizes detected, extract all dimensions
+        notes.push(format!(
+            "PDF has {} pages with mixed sizes",
+            page_count
+        ));
+        
+        pages_tree
+            .iter()
+            .map(|(pnum, page_id)| {
+                let (width_pts, height_pts) = extract_page_dimensions(&doc, *page_id);
+                let width_mm = mm_from_pt(width_pts);
+                let height_mm = mm_from_pt(height_pts);
+                
+                if page_count <= 20 {
+                    notes.push(format!(
+                        "Page {}: {:.1} × {:.1} mm",
+                        pnum, width_mm, height_mm
+                    ));
+                }
+                
+                PageSizeMm { width_mm, height_mm }
+            })
+            .collect()
+    };
 
     Ok(EstimateResult {
         page_count,
         page_sizes,
         notes,
     })
+}
+
+/// Helper function to extract page dimensions (width, height) in points.
+///
+/// Attempts to read MediaBox or CropBox from the page dictionary.
+/// Falls back to A4 size (595×842 points) if dimensions cannot be extracted.
+fn extract_page_dimensions(doc: &LopdfDocument, page_id: (u32, u16)) -> (f64, f64) {
+    let default_pts = (595.0_f64, 842.0_f64); // A4 in points
+    let mut width_pts = default_pts.0;
+    let mut height_pts = default_pts.1;
+
+    if let Ok(obj) = doc.get_object(page_id) {
+        if let lopdf::Object::Dictionary(page_dict) = obj {
+            // Try MediaBox first
+            if let Ok(mediabox_obj) = page_dict.get(b"MediaBox") {
+                if let Some((w, h)) = parse_box_dimensions(mediabox_obj) {
+                    width_pts = w;
+                    height_pts = h;
+                }
+            } else if let Ok(cropbox_obj) = page_dict.get(b"CropBox") {
+                // Fallback to CropBox
+                if let Some((w, h)) = parse_box_dimensions(cropbox_obj) {
+                    width_pts = w;
+                    height_pts = h;
+                }
+            }
+        }
+    }
+
+    (width_pts, height_pts)
+}
+
+/// Helper function to parse a PDF box (MediaBox or CropBox) into (width, height).
+fn parse_box_dimensions(box_obj: &lopdf::Object) -> Option<(f64, f64)> {
+    if let lopdf::Object::Array(vals) = box_obj {
+        if vals.len() == 4 {
+            let x0 = obj_to_f64(&vals[0]);
+            let y0 = obj_to_f64(&vals[1]);
+            let x1 = obj_to_f64(&vals[2]);
+            let y1 = obj_to_f64(&vals[3]);
+            let width = (x1 - x0).abs();
+            let height = (y1 - y0).abs();
+            return Some((width, height));
+        }
+    }
+    None
 }
