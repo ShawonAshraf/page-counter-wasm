@@ -1,0 +1,483 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PDF Page Counter Demo - PDF.js</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+
+        .container {
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            max-width: 700px;
+            width: 100%;
+            padding: 40px;
+        }
+
+        h1 {
+            color: #333;
+            margin-bottom: 10px;
+            font-size: 28px;
+            text-align: center;
+        }
+
+        .subtitle {
+            color: #666;
+            text-align: center;
+            margin-bottom: 30px;
+            font-size: 14px;
+        }
+
+        .badge {
+            display: inline-block;
+            background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+            color: white;
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 600;
+            margin-left: 10px;
+        }
+
+        .upload-area {
+            border: 3px dashed #f5576c;
+            border-radius: 15px;
+            padding: 40px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            background: #fff5f7;
+        }
+
+        .upload-area:hover {
+            background: #ffe8ed;
+            border-color: #f093fb;
+        }
+
+        .upload-area.dragging {
+            background: #ffd4dd;
+            border-color: #f093fb;
+            transform: scale(1.02);
+        }
+
+        .upload-icon {
+            font-size: 48px;
+            margin-bottom: 15px;
+        }
+
+        .upload-text {
+            color: #f5576c;
+            font-size: 16px;
+            font-weight: 600;
+            margin-bottom: 8px;
+        }
+
+        .upload-hint {
+            color: #999;
+            font-size: 13px;
+        }
+
+        input[type="file"] {
+            display: none;
+        }
+
+        .file-info {
+            margin-top: 20px;
+            padding: 15px;
+            background: #fff5f7;
+            border-radius: 10px;
+            display: none;
+        }
+
+        .file-info.show {
+            display: block;
+        }
+
+        .file-name {
+            color: #333;
+            font-weight: 600;
+            margin-bottom: 5px;
+            word-break: break-all;
+        }
+
+        .file-size {
+            color: #666;
+            font-size: 13px;
+        }
+
+        .results {
+            margin-top: 25px;
+            display: none;
+        }
+
+        .results.show {
+            display: block;
+        }
+
+        .result-card {
+            background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+            color: white;
+            padding: 25px;
+            border-radius: 15px;
+            margin-bottom: 15px;
+        }
+
+        .result-label {
+            font-size: 13px;
+            opacity: 0.9;
+            margin-bottom: 5px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .result-value {
+            font-size: 36px;
+            font-weight: bold;
+        }
+
+        .info-box {
+            background: #e3f2fd;
+            border-left: 4px solid #2196f3;
+            padding: 15px;
+            border-radius: 8px;
+            margin-top: 15px;
+        }
+
+        .info-box h3 {
+            color: #1976d2;
+            font-size: 14px;
+            margin-bottom: 8px;
+        }
+
+        .info-box p {
+            color: #1976d2;
+            font-size: 13px;
+            margin: 5px 0;
+        }
+
+        .page-list {
+            max-height: 200px;
+            overflow-y: auto;
+            background: white;
+            padding: 10px;
+            border-radius: 5px;
+            margin-top: 10px;
+        }
+
+        .page-item {
+            padding: 5px;
+            font-size: 12px;
+            color: #1976d2;
+        }
+
+        .error {
+            background: #f8d7da;
+            border-left: 4px solid #dc3545;
+            color: #721c24;
+            padding: 15px;
+            border-radius: 8px;
+            margin-top: 15px;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 20px;
+            color: #f5576c;
+            display: none;
+        }
+
+        .loading.show {
+            display: block;
+        }
+
+        .spinner {
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #f5576c;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 10px;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .reset-btn {
+            background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+            color: white;
+            border: none;
+            padding: 12px 30px;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            margin-top: 20px;
+            width: 100%;
+        }
+
+        .reset-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(245, 87, 108, 0.4);
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>📄 PDF Page Counter <span class="badge">PDF.js</span></h1>
+        <p class="subtitle">Upload your PDF to count pages and analyze page sizes</p>
+
+        <div class="upload-area" id="uploadArea">
+            <div class="upload-icon">📎</div>
+            <div class="upload-text">Click to upload or drag & drop</div>
+            <div class="upload-hint">PDF files only</div>
+        </div>
+
+        <input type="file" id="fileInput" accept=".pdf" />
+
+        <div class="file-info" id="fileInfo">
+            <div class="file-name" id="fileName"></div>
+            <div class="file-size" id="fileSize"></div>
+        </div>
+
+        <div class="loading" id="loading">
+            <div class="spinner"></div>
+            <div>Analyzing PDF...</div>
+        </div>
+
+        <div class="results" id="results">
+            <div class="result-card">
+                <div class="result-label">Total Page Count</div>
+                <div class="result-value" id="pageCount">-</div>
+            </div>
+
+            <div id="infoSection"></div>
+
+            <div id="errorSection" style="display: none;">
+                <div class="error" id="errorMessage"></div>
+            </div>
+
+            <button class="reset-btn" id="resetBtn">Upload Another PDF</button>
+        </div>
+    </div>
+
+    <script type="module">
+        import { 
+            countPdfPages, 
+            getPdfInfo, 
+            getPdfSummary, 
+            isValidPdf 
+        } from './counter.js';
+
+        // DOM elements
+        const uploadArea = document.getElementById('uploadArea');
+        const fileInput = document.getElementById('fileInput');
+        const fileInfo = document.getElementById('fileInfo');
+        const fileName = document.getElementById('fileName');
+        const fileSize = document.getElementById('fileSize');
+        const loading = document.getElementById('loading');
+        const results = document.getElementById('results');
+        const pageCount = document.getElementById('pageCount');
+        const infoSection = document.getElementById('infoSection');
+        const errorSection = document.getElementById('errorSection');
+        const errorMessage = document.getElementById('errorMessage');
+        const resetBtn = document.getElementById('resetBtn');
+
+        // Click to upload
+        uploadArea.addEventListener('click', () => {
+            fileInput.click();
+        });
+
+        // File selection
+        fileInput.addEventListener('change', (e) => {
+            if (e.target.files.length > 0) {
+                handleFile(e.target.files[0]);
+            }
+        });
+
+        // Drag and drop
+        uploadArea.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            uploadArea.classList.add('dragging');
+        });
+
+        uploadArea.addEventListener('dragleave', () => {
+            uploadArea.classList.remove('dragging');
+        });
+
+        uploadArea.addEventListener('drop', (e) => {
+            e.preventDefault();
+            uploadArea.classList.remove('dragging');
+            if (e.dataTransfer.files.length > 0) {
+                const file = e.dataTransfer.files[0];
+                if (file.type === 'application/pdf') {
+                    handleFile(file);
+                } else {
+                    showError('Please upload a PDF file only.');
+                }
+            }
+        });
+
+        // Reset button
+        resetBtn.addEventListener('click', () => {
+            fileInput.value = '';
+            fileInfo.classList.remove('show');
+            results.classList.remove('show');
+            uploadArea.style.display = 'block';
+            errorSection.style.display = 'none';
+        });
+
+        // Handle file upload
+        async function handleFile(file) {
+            // Show file info
+            fileName.textContent = file.name;
+            fileSize.textContent = formatFileSize(file.size);
+            fileInfo.classList.add('show');
+
+            // Hide upload area and show loading
+            uploadArea.style.display = 'none';
+            loading.classList.add('show');
+            results.classList.remove('show');
+
+            try {
+                // Read file as array buffer
+                // Note: Functions internally handle buffer copying to prevent detachment issues
+                const arrayBuffer = await file.arrayBuffer();
+                const pdfData = new Uint8Array(arrayBuffer);
+
+                // Validate PDF
+                const isValid = await isValidPdf(pdfData);
+                if (!isValid) {
+                    throw new Error('Invalid or corrupted PDF file');
+                }
+
+                // Get page count
+                const count = await countPdfPages(pdfData);
+                
+                // Get detailed info
+                const info = await getPdfInfo(pdfData);
+                
+                // Get summary
+                const summary = await getPdfSummary(pdfData);
+
+                // Hide loading
+                loading.classList.remove('show');
+
+                // Show results
+                showResults(count, info, summary);
+            } catch (error) {
+                loading.classList.remove('show');
+                showError('Failed to process PDF: ' + error.message);
+                console.error('Error processing PDF:', error);
+            }
+        }
+
+        // Show results
+        function showResults(count, info, summary) {
+            pageCount.textContent = count;
+
+            let infoHTML = '';
+
+            // Show uniformity info
+            if (summary.hasUniformPages) {
+                infoHTML += `
+                    <div class="info-box">
+                        <h3>📐 Page Size Information</h3>
+                        <p><strong>All pages have the same size</strong></p>
+                        <p>Dimensions: ${summary.commonSize}</p>
+                        <p>Inches: ${summary.commonSizeInches}</p>
+                        <p>Orientation: ${summary.orientation}</p>
+                        ${summary.paperSize ? `<p>Paper Size: <strong>${summary.paperSize}</strong></p>` : ''}
+                    </div>
+                `;
+            } else {
+                infoHTML += `
+                    <div class="info-box">
+                        <h3>📐 Page Size Information</h3>
+                        <p><strong>Pages have different sizes</strong></p>
+                        <p>${summary.uniqueSizes.length} unique size(s) found:</p>
+                        <div class="page-list">
+                `;
+
+                summary.uniqueSizes.forEach((size, idx) => {
+                    infoHTML += `
+                        <div class="page-item">
+                            <strong>Size ${idx + 1}:</strong> ${size.dimensions} (${size.orientation}) - 
+                            ${size.pageCount} page(s): ${size.pageNumbers.join(', ')}
+                        </div>
+                    `;
+                });
+
+                infoHTML += `
+                        </div>
+                    </div>
+                `;
+            }
+
+            // Show first few pages info
+            if (info.pages.length > 0 && info.pages.length <= 10) {
+                infoHTML += `
+                    <div class="info-box">
+                        <h3>📄 Individual Page Dimensions</h3>
+                        <div class="page-list">
+                `;
+
+                info.pages.forEach(page => {
+                    infoHTML += `
+                        <div class="page-item">
+                            Page ${page.pageNumber}: ${page.widthMm.toFixed(2)} × ${page.heightMm.toFixed(2)} mm 
+                            (${page.orientation})
+                        </div>
+                    `;
+                });
+
+                infoHTML += `
+                        </div>
+                    </div>
+                `;
+            }
+
+            infoSection.innerHTML = infoHTML;
+            errorSection.style.display = 'none';
+            results.classList.add('show');
+        }
+
+        // Show error
+        function showError(message) {
+            errorMessage.textContent = message;
+            errorSection.style.display = 'block';
+            pageCount.textContent = '-';
+            infoSection.innerHTML = '';
+            results.classList.add('show');
+        }
+
+        // Format file size
+        function formatFileSize(bytes) {
+            if (bytes === 0) return '0 Bytes';
+            const k = 1024;
+            const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return Math.round(bytes / Math.pow(k, i) * 100) / 100 + ' ' + sizes[i];
+        }
+    </script>
+</body>
+</html>
