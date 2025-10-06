@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "description": "A rust web-assembly module to count pages from uploaded documents (pdf, xlsx, txt and markdown) in the frontend.",
   "type": "module",
-  "main": "counter.js",
+  "main": "views/counter.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "dev": "python3 -m http.server 8000",
