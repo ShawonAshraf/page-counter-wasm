@@ -337,27 +337,26 @@
         </div>
     </div>
 
+    <!-- Load PDF.js -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+    <script>
+        // Set PDF.js worker
+        pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+    </script>
+
     <script type="module">
-        import init, { estimate_document } from './pkg/page_counter_wasm.js';
+        import { estimate_document } from './pkg/page_counter_wasm.js';
 
-        let wasmInitialized = false;
-
-        // Initialize WASM
-        async function initWasm() {
-            if (!wasmInitialized) {
-                try {
-                    await init();
-                    wasmInitialized = true;
-                    console.log('WASM initialized successfully');
-                } catch (error) {
-                    console.error('Failed to initialize WASM:', error);
-                    showError('Failed to initialize the page counter module. Please refresh the page.');
-                }
-            }
+        // Try to initialize WASM but don't block on it
+        let wasmAvailable = false;
+        try {
+            const init = (await import('./pkg/page_counter_wasm.js')).default;
+            await init();
+            wasmAvailable = true;
+            console.log('WASM initialized successfully');
+        } catch (error) {
+            console.log('WASM not available, using PDF.js for PDFs:', error);
         }
-
-        // Initialize on page load
-        initWasm();
 
         // DOM elements
         const uploadArea = document.getElementById('uploadArea');
@@ -418,10 +417,6 @@
 
         // Handle file upload
         async function handleFile(file) {
-            // Ensure WASM is initialized
-            await initWasm();
-            if (!wasmInitialized) return;
-
             // Show file info
             fileName.textContent = file.name;
             fileSize.textContent = formatFileSize(file.size);
@@ -432,32 +427,72 @@
             loading.classList.add('show');
             results.classList.remove('show');
 
+            // Start timing
+            const startTime = performance.now();
+
             try {
-                // Read file as array buffer
-                const arrayBuffer = await file.arrayBuffer();
-                const bytes = new Uint8Array(arrayBuffer);
-
-                // Start timing
-                const startTime = performance.now();
-
-                // Call WASM function
-                const resultJson = estimate_document(bytes, file.name, null);
+                // Check if it's a PDF file
+                const isPDF = file.name.toLowerCase().endsWith('.pdf') || file.type === 'application/pdf';
                 
-                // End timing
-                const endTime = performance.now();
-                const executionTimeMs = endTime - startTime;
-
-                // Parse result
-                const result = JSON.parse(resultJson);
-
-                // Hide loading
-                loading.classList.remove('show');
-
-                // Check for errors
-                if (result.error) {
-                    showError(result.error);
-                } else {
+                if (isPDF) {
+                    // Use PDF.js for PDF files (FAST!)
+                    const arrayBuffer = await file.arrayBuffer();
+                    const loadingTask = pdfjsLib.getDocument({data: arrayBuffer});
+                    const pdf = await loadingTask.promise;
+                    
+                    const pageCount = pdf.numPages;
+                    
+                    // Get page dimensions from first page
+                    const firstPage = await pdf.getPage(1);
+                    const viewport = firstPage.getViewport({scale: 1.0});
+                    const widthPt = viewport.width;
+                    const heightPt = viewport.height;
+                    
+                    // Convert to mm (1 point = 1/72 inch, 1 inch = 25.4mm)
+                    const widthMm = widthPt / 72 * 25.4;
+                    const heightMm = heightPt / 72 * 25.4;
+                    
+                    // End timing
+                    const endTime = performance.now();
+                    const executionTimeMs = endTime - startTime;
+                    
+                    // Hide loading
+                    loading.classList.remove('show');
+                    
+                    // Show results
+                    const result = {
+                        page_count: pageCount,
+                        page_sizes: Array(pageCount).fill({width_mm: widthMm, height_mm: heightMm}),
+                        notes: [
+                            `PDF has ${pageCount} pages (dimensions: ${widthMm.toFixed(1)} × ${heightMm.toFixed(1)} mm)`,
+                            '⚡ Using PDF.js (fast and reliable)'
+                        ]
+                    };
                     showResults(result, executionTimeMs);
+                    
+                } else {
+                    // Use WASM for non-PDF files
+                    if (!wasmAvailable) {
+                        throw new Error('WASM module not available for processing this file type');
+                    }
+                    
+                    const arrayBuffer = await file.arrayBuffer();
+                    const bytes = new Uint8Array(arrayBuffer);
+                    const resultJson = estimate_document(bytes, file.name, null);
+                    const result = JSON.parse(resultJson);
+                    
+                    // End timing
+                    const endTime = performance.now();
+                    const executionTimeMs = endTime - startTime;
+                    
+                    // Hide loading
+                    loading.classList.remove('show');
+                    
+                    if (result.error) {
+                        showError(result.error);
+                    } else {
+                        showResults(result, executionTimeMs);
+                    }
                 }
             } catch (error) {
                 loading.classList.remove('show');
