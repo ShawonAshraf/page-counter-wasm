@@ -278,7 +278,7 @@
 </head>
 <body>
     <div class="container">
-        <h1>📄 Page Counter</h1>
+        <h1>📄 Page Counter - WASM</h1>
         <p class="subtitle">Upload your document to count pages (PDF, XLSX, TXT, MD)</p>
 
         <div class="upload-area" id="uploadArea">
@@ -345,17 +345,16 @@
     </script>
 
     <script type="module">
-        import { estimate_document } from './pkg/page_counter_wasm.js';
+        import init, { estimate_document, estimate_pdf_with_pdfjs } from './pkg/page_counter_wasm.js';
 
-        // Try to initialize WASM but don't block on it
+        // Initialize WASM
         let wasmAvailable = false;
         try {
-            const init = (await import('./pkg/page_counter_wasm.js')).default;
             await init();
             wasmAvailable = true;
             console.log('WASM initialized successfully');
         } catch (error) {
-            console.log('WASM not available, using PDF.js for PDFs:', error);
+            console.error('WASM initialization failed:', error);
         }
 
         // DOM elements
@@ -417,6 +416,11 @@
 
         // Handle file upload
         async function handleFile(file) {
+            if (!wasmAvailable) {
+                showError('WASM module not initialized. Please refresh the page.');
+                return;
+            }
+
             // Show file info
             fileName.textContent = file.name;
             fileSize.textContent = formatFileSize(file.size);
@@ -431,68 +435,37 @@
             const startTime = performance.now();
 
             try {
+                // Read file as array buffer
+                const arrayBuffer = await file.arrayBuffer();
+                const bytes = new Uint8Array(arrayBuffer);
+                
                 // Check if it's a PDF file
                 const isPDF = file.name.toLowerCase().endsWith('.pdf') || file.type === 'application/pdf';
                 
+                let resultJson;
                 if (isPDF) {
-                    // Use PDF.js for PDF files (FAST!)
-                    const arrayBuffer = await file.arrayBuffer();
-                    const loadingTask = pdfjsLib.getDocument({data: arrayBuffer});
-                    const pdf = await loadingTask.promise;
-                    
-                    const pageCount = pdf.numPages;
-                    
-                    // Get page dimensions from first page
-                    const firstPage = await pdf.getPage(1);
-                    const viewport = firstPage.getViewport({scale: 1.0});
-                    const widthPt = viewport.width;
-                    const heightPt = viewport.height;
-                    
-                    // Convert to mm (1 point = 1/72 inch, 1 inch = 25.4mm)
-                    const widthMm = widthPt / 72 * 25.4;
-                    const heightMm = heightPt / 72 * 25.4;
-                    
-                    // End timing
-                    const endTime = performance.now();
-                    const executionTimeMs = endTime - startTime;
-                    
-                    // Hide loading
-                    loading.classList.remove('show');
-                    
-                    // Show results
-                    const result = {
-                        page_count: pageCount,
-                        page_sizes: Array(pageCount).fill({width_mm: widthMm, height_mm: heightMm}),
-                        notes: [
-                            `PDF has ${pageCount} pages (dimensions: ${widthMm.toFixed(1)} × ${heightMm.toFixed(1)} mm)`,
-                            '⚡ Using PDF.js (fast and reliable)'
-                        ]
-                    };
-                    showResults(result, executionTimeMs);
-                    
+                    // Use WASM function that calls PDF.js
+                    resultJson = await estimate_pdf_with_pdfjs(bytes);
                 } else {
                     // Use WASM for non-PDF files
-                    if (!wasmAvailable) {
-                        throw new Error('WASM module not available for processing this file type');
-                    }
-                    
-                    const arrayBuffer = await file.arrayBuffer();
-                    const bytes = new Uint8Array(arrayBuffer);
-                    const resultJson = estimate_document(bytes, file.name, null);
-                    const result = JSON.parse(resultJson);
-                    
-                    // End timing
-                    const endTime = performance.now();
-                    const executionTimeMs = endTime - startTime;
-                    
-                    // Hide loading
-                    loading.classList.remove('show');
-                    
-                    if (result.error) {
-                        showError(result.error);
-                    } else {
-                        showResults(result, executionTimeMs);
-                    }
+                    resultJson = estimate_document(bytes, file.name, null);
+                }
+                
+                // Parse result
+                const result = JSON.parse(resultJson);
+                
+                // End timing
+                const endTime = performance.now();
+                const executionTimeMs = endTime - startTime;
+                
+                // Hide loading
+                loading.classList.remove('show');
+                
+                // Check for errors
+                if (result.error) {
+                    showError(result.error);
+                } else {
+                    showResults(result, executionTimeMs);
                 }
             } catch (error) {
                 loading.classList.remove('show');

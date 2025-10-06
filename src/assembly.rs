@@ -22,8 +22,9 @@
 use crate::estimators::{
     estimate_markdown_pages, estimate_pdf_pages, estimate_text_pages, estimate_xlsx_pages,
 };
-use crate::file_utils::detect_type;
-use crate::schema::EstimateOptions;
+use crate::file_utils::{detect_type, mm_from_pt};
+use crate::pdfjs_bindings;
+use crate::schema::{EstimateOptions, EstimateResult, PageSizeMm};
 use base64::Engine;
 use serde_json::json;
 use wasm_bindgen::prelude::wasm_bindgen;
@@ -208,5 +209,60 @@ pub fn estimate_document(
         Err(err_msg) => {
             JsValue::from_str(&json!({"error": err_msg, "detected": detected}).to_string())
         }
+    }
+}
+
+/// Estimate PDF pages using PDF.js (async)
+/// 
+/// This function uses PDF.js through JavaScript bindings for fast and reliable
+/// PDF page counting. Falls back to Rust parser if PDF.js is not available.
+#[wasm_bindgen]
+pub async fn estimate_pdf_with_pdfjs(bytes: Vec<u8>) -> JsValue {
+    // Try PDF.js first (fast and reliable)
+    match pdfjs_bindings::count_pdf_pages_js(&bytes).await {
+        Ok(js_result) => {
+            // Parse the JSON result from PDF.js
+            if let Some(json_str) = js_result.as_string() {
+                if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&json_str) {
+                    let page_count = parsed["page_count"].as_u64().unwrap_or(0) as usize;
+                    let width_pt = parsed["width_pt"].as_f64().unwrap_or(595.0);
+                    let height_pt = parsed["height_pt"].as_f64().unwrap_or(842.0);
+                    
+                    let width_mm = mm_from_pt(width_pt);
+                    let height_mm = mm_from_pt(height_pt);
+                    
+                    let result = EstimateResult {
+                        page_count,
+                        page_sizes: vec![PageSizeMm { width_mm, height_mm }; page_count],
+                        notes: vec![
+                            format!("PDF has {} pages (dimensions: {:.1} × {:.1} mm)", 
+                                page_count, width_mm, height_mm),
+                            "⚡ Using PDF.js (fast and reliable)".to_string(),
+                        ],
+                    };
+                    
+                    match serde_json::to_string(&result) {
+                        Ok(s) => return JsValue::from_str(&s),
+                        Err(_) => {}
+                    }
+                }
+            }
+        }
+        Err(e) => {
+            // PDF.js failed, log and fall back to Rust parser
+            web_sys::console::log_1(&format!("PDF.js not available, using Rust parser: {:?}", e).into());
+        }
+    }
+    
+    // Fallback to Rust parser
+    let options = EstimateOptions::default();
+    match estimate_pdf_pages(&bytes, &options) {
+        Ok(result) => match serde_json::to_string(&result) {
+            Ok(s) => JsValue::from_str(&s),
+            Err(_) => JsValue::from_str(&json!({"error":"serialization failed"}).to_string()),
+        },
+        Err(err) => JsValue::from_str(
+            &json!({"error": format!("{:?}", err), "detected": "pdf"}).to_string()
+        ),
     }
 }
