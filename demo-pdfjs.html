@@ -221,6 +221,29 @@
             100% { transform: rotate(360deg); }
         }
 
+        .execution-time {
+            background: #e3f2fd;
+            border-left: 4px solid #2196f3;
+            padding: 15px;
+            border-radius: 8px;
+            margin-top: 15px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .execution-time-label {
+            color: #1565c0;
+            font-weight: 600;
+            font-size: 14px;
+        }
+
+        .execution-time-value {
+            color: #1565c0;
+            font-size: 18px;
+            font-weight: bold;
+        }
+
         .reset-btn {
             background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
             color: white;
@@ -272,6 +295,13 @@
 
             <div id="infoSection"></div>
 
+            <div id="executionTimeSection" style="display: none;">
+                <div class="execution-time">
+                    <div class="execution-time-label">⚡ Processing Time</div>
+                    <div class="execution-time-value" id="executionTimeValue">-</div>
+                </div>
+            </div>
+
             <div id="errorSection" style="display: none;">
                 <div class="error" id="errorMessage"></div>
             </div>
@@ -298,6 +328,8 @@
         const results = document.getElementById('results');
         const pageCount = document.getElementById('pageCount');
         const infoSection = document.getElementById('infoSection');
+        const executionTimeSection = document.getElementById('executionTimeSection');
+        const executionTimeValue = document.getElementById('executionTimeValue');
         const errorSection = document.getElementById('errorSection');
         const errorMessage = document.getElementById('errorMessage');
         const resetBtn = document.getElementById('resetBtn');
@@ -344,6 +376,7 @@
             results.classList.remove('show');
             uploadArea.style.display = 'block';
             errorSection.style.display = 'none';
+            executionTimeSection.style.display = 'none';
         });
 
         // Handle file upload
@@ -364,6 +397,9 @@
                 const arrayBuffer = await file.arrayBuffer();
                 const pdfData = new Uint8Array(arrayBuffer);
 
+                // Start timing
+                const startTime = performance.now();
+
                 // Validate PDF
                 const isValid = await isValidPdf(pdfData);
                 if (!isValid) {
@@ -379,11 +415,15 @@
                 // Get summary
                 const summary = await getPdfSummary(pdfData);
 
+                // End timing
+                const endTime = performance.now();
+                const executionTimeMs = endTime - startTime;
+
                 // Hide loading
                 loading.classList.remove('show');
 
                 // Show results
-                showResults(count, info, summary);
+                showResults(count, info, summary, executionTimeMs);
             } catch (error) {
                 loading.classList.remove('show');
                 showError('Failed to process PDF: ' + error.message);
@@ -392,7 +432,7 @@
         }
 
         // Show results
-        function showResults(count, info, summary) {
+        function showResults(count, info, summary, executionTimeMs) {
             pageCount.textContent = count;
 
             let infoHTML = '';
@@ -457,6 +497,15 @@
             }
 
             infoSection.innerHTML = infoHTML;
+
+            // Show execution time
+            if (executionTimeMs !== undefined) {
+                executionTimeValue.textContent = formatExecutionTime(executionTimeMs);
+                executionTimeSection.style.display = 'block';
+            } else {
+                executionTimeSection.style.display = 'none';
+            }
+
             errorSection.style.display = 'none';
             results.classList.add('show');
         }
@@ -465,6 +514,7 @@
         function showError(message) {
             errorMessage.textContent = message;
             errorSection.style.display = 'block';
+            executionTimeSection.style.display = 'none';
             pageCount.textContent = '-';
             infoSection.innerHTML = '';
             results.classList.add('show');
@@ -477,6 +527,17 @@
             const sizes = ['Bytes', 'KB', 'MB', 'GB'];
             const i = Math.floor(Math.log(bytes) / Math.log(k));
             return Math.round(bytes / Math.pow(k, i) * 100) / 100 + ' ' + sizes[i];
+        }
+
+        // Format execution time
+        function formatExecutionTime(ms) {
+            if (ms < 1) {
+                return `${(ms * 1000).toFixed(0)} μs`;
+            } else if (ms < 1000) {
+                return `${ms.toFixed(2)} ms`;
+            } else {
+                return `${(ms / 1000).toFixed(2)} s`;
+            }
         }
     </script>
 </body>

@@ -232,6 +232,29 @@
             overflow-y: auto;
         }
 
+        .execution-time {
+            background: #e3f2fd;
+            border-left: 4px solid #2196f3;
+            padding: 15px;
+            border-radius: 8px;
+            margin-top: 15px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .execution-time-label {
+            color: #1565c0;
+            font-weight: 600;
+            font-size: 14px;
+        }
+
+        .execution-time-value {
+            color: #1565c0;
+            font-size: 18px;
+            font-weight: bold;
+        }
+
         .reset-btn {
             background: #667eea;
             color: white;
@@ -296,6 +319,13 @@
                 </div>
             </div>
 
+            <div id="executionTimeSection" style="display: none;">
+                <div class="execution-time">
+                    <div class="execution-time-label">⚡ Processing Time</div>
+                    <div class="execution-time-value" id="executionTimeValue">-</div>
+                </div>
+            </div>
+
             <div id="errorSection" style="display: none;">
                 <div class="error">
                     <div class="error-title">⚠️ Error</div>
@@ -342,6 +372,8 @@
         const notesList = document.getElementById('notesList');
         const pageSizesSection = document.getElementById('pageSizesSection');
         const pageSizesList = document.getElementById('pageSizesList');
+        const executionTimeSection = document.getElementById('executionTimeSection');
+        const executionTimeValue = document.getElementById('executionTimeValue');
         const errorSection = document.getElementById('errorSection');
         const errorMessage = document.getElementById('errorMessage');
         const resetBtn = document.getElementById('resetBtn');
@@ -405,9 +437,16 @@
                 const arrayBuffer = await file.arrayBuffer();
                 const bytes = new Uint8Array(arrayBuffer);
 
+                // Start timing
+                const startTime = performance.now();
+
                 // Call WASM function
                 const resultJson = estimate_document(bytes, file.name, null);
                 
+                // End timing
+                const endTime = performance.now();
+                const executionTimeMs = endTime - startTime;
+
                 // Parse result
                 const result = JSON.parse(resultJson);
 
@@ -418,7 +457,7 @@
                 if (result.error) {
                     showError(result.error);
                 } else {
-                    showResults(result);
+                    showResults(result, executionTimeMs);
                 }
             } catch (error) {
                 loading.classList.remove('show');
@@ -428,7 +467,7 @@
         }
 
         // Show results
-        function showResults(result) {
+        function showResults(result, executionTimeMs) {
             // Show page count
             pageCount.textContent = result.page_count;
 
@@ -459,6 +498,14 @@
                 pageSizesSection.style.display = 'none';
             }
 
+            // Show execution time
+            if (executionTimeMs !== undefined) {
+                executionTimeValue.textContent = formatExecutionTime(executionTimeMs);
+                executionTimeSection.style.display = 'block';
+            } else {
+                executionTimeSection.style.display = 'none';
+            }
+
             errorSection.style.display = 'none';
             results.classList.add('show');
         }
@@ -469,6 +516,7 @@
             errorSection.style.display = 'block';
             notesSection.style.display = 'none';
             pageSizesSection.style.display = 'none';
+            executionTimeSection.style.display = 'none';
             pageCount.textContent = '-';
             results.classList.add('show');
         }
@@ -494,6 +542,17 @@
             const sizes = ['Bytes', 'KB', 'MB', 'GB'];
             const i = Math.floor(Math.log(bytes) / Math.log(k));
             return Math.round(bytes / Math.pow(k, i) * 100) / 100 + ' ' + sizes[i];
+        }
+
+        // Format execution time
+        function formatExecutionTime(ms) {
+            if (ms < 1) {
+                return `${(ms * 1000).toFixed(0)} μs`;
+            } else if (ms < 1000) {
+                return `${ms.toFixed(2)} ms`;
+            } else {
+                return `${(ms / 1000).toFixed(2)} s`;
+            }
         }
     </script>
 </body>
