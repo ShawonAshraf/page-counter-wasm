@@ -19,11 +19,12 @@
 //!
 //! The estimators respect user-provided options for paper sizes and other parameters.
 
-use crate::ultra_fast_pdf;
-use crate::file_utils::{a4_mm, letter_mm, mm_from_pt};
+use crate::file_utils::{a4_mm, letter_mm};
 use crate::schema::{EstimateOptions, EstimateResult, EstimatorError, PageSizeMm};
 use calamine::{Data, Reader, Xlsx};
 use std::io::Cursor;
+use wasm_bindgen::prelude::*;
+
 
 /// Estimates the number of pages for a plain text file.
 ///
@@ -257,102 +258,73 @@ pub fn estimate_xlsx_pages(
     })
 }
 
-/// Extracts the exact page count and page dimensions from a PDF file.
+/// Estimates the number of pages in a PDF file using simple regex parsing.
 ///
-/// This highly optimized implementation extracts page count directly from the PDF catalog
-/// without traversing the page tree, making it extremely fast even for very large PDFs.
+/// This is a fallback method for synchronous PDF processing. For better accuracy
+/// and reliability, use the async `estimate_pdf_with_pdfjs` function which uses PDF.js.
 ///
-/// # Arguments
+/// This function counts PDF page objects by searching for `/Type /Page` patterns in the PDF structure.
 ///
-/// * `bytes` - The raw bytes of the PDF file
-/// * `_options` - Estimation options (currently unused; PDF dimensions are extracted from the file)
+/// # Parameters
+///
+/// * `bytes` - The raw PDF file bytes
+/// * `_options` - Estimation options (currently unused for PDFs, as page dimensions are extracted from the PDF)
 ///
 /// # Returns
 ///
-/// Returns `Ok(EstimateResult)` on success, containing:
-/// - `page_count`: Exact number of pages in the PDF
-/// - `page_sizes`: Vector of page dimensions (in millimeters)
-/// - `notes`: Information about page dimensions and optimization applied
-///
-/// Returns `Err(EstimatorError::PdfError)` if the PDF cannot be parsed.
-///
-/// # Performance Optimization
-///
-/// This function uses multiple optimization strategies:
-/// 1. **Direct catalog access**: Reads /Count from root Pages object (O(1) operation)
-/// 2. **Inherited MediaBox**: Extracts MediaBox from root Pages node (inherited by all pages)
-/// 3. **Zero iteration**: Completely avoids traversing individual pages for uniform PDFs
-/// 4. **Lazy fallback**: Only iterates pages if catalog access fails or mixed sizes detected
-///
-/// This approach is **orders of magnitude faster** than iterating all pages, especially
-/// for large PDFs (1000+ pages).
-///
-/// # Page Dimensions
-///
-/// The function attempts to extract page dimensions in the following order:
-/// 1. **Inherited MediaBox**: From root Pages object (fastest, covers 95%+ of PDFs)
-/// 2. **First page MediaBox**: Sampled from first actual page
-/// 3. **CropBox**: Fallback if MediaBox unavailable
-/// 4. **Default**: A4 size (595×842 points ≈ 210×297 mm)
-///
-/// Dimensions are converted from PDF points (1/72 inch) to millimeters.
-///
-/// # Example
-///
-/// ```ignore
-/// match estimate_pdf_pages(pdf_bytes, &options) {
-///     Ok(result) => {
-///         println!("PDF has {} pages", result.page_count);
-///         println!("Page size: {:.1} × {:.1} mm", 
-///                  result.page_sizes[0].width_mm, result.page_sizes[0].height_mm);
-///     },
-///     Err(e) => eprintln!("Failed to parse PDF: {:?}", e),
-/// }
-/// ```
+/// Returns a `Result` containing the `EstimateResult` with page count and dimensions,
+/// This is a fallback method for synchronous PDF processing.
+/// or an `EstimatorError` if the PDF cannot be parsed.
 pub fn estimate_pdf_pages(
     bytes: &[u8],
     _options: &EstimateOptions,
 ) -> Result<EstimateResult, EstimatorError> {
-    // Safety check for empty input
-    if bytes.is_empty() {
-        return Err(EstimatorError::PdfError("PDF file is empty".to_string()));
-    }
+    // Convert bytes to string for pattern matching
+    let pdf_str = String::from_utf8_lossy(bytes);
     
-    // Safety check for reasonable file size (max 500MB to prevent memory issues)
-    if bytes.len() > 500_000_000 {
-        return Err(EstimatorError::PdfError("PDF file too large (>500MB)".to_string()));
-    }
+    // Count occurrences of /Type /Page (but not /Type /Pages)
+    // This is a simple heuristic that works for most PDFs
+    let mut page_count = 0;
+    let mut search_pos = 0;
     
-    // ULTRA FAST PATH: Byte-level search (PDF.js approach)
-    // Works directly on bytes without UTF-8 validation for maximum speed
-    if let Some(page_count) = ultra_fast_pdf::count_pages_ultra_fast(bytes) {
-        if page_count > 0 && page_count <= 100_000 {
-            // Try to get page dimensions
-            let (width_pts, height_pts) = ultra_fast_pdf::extract_mediabox_ultra_fast(bytes)
-                .unwrap_or((595.0, 842.0)); // Default to A4
+    while let Some(pos) = pdf_str[search_pos..].find("/Type") {
+        let abs_pos = search_pos + pos;
+        let remaining = &pdf_str[abs_pos..];
+        
+        // Check if this is "/Type /Page" or "/Type/Page"
+        if remaining.starts_with("/Type /Page") || remaining.starts_with("/Type/Page") {
+            // Make sure it's not "/Type /Pages"
+            let after_page = if remaining.starts_with("/Type /Page") {
+                &remaining[11..]
+            } else {
+                &remaining[10..]
+            };
             
-            let width_mm = mm_from_pt(width_pts);
-            let height_mm = mm_from_pt(height_pts);
-            
-            let notes = vec![
-                format!(
-                    "PDF has {} pages (dimensions: {:.1} × {:.1} mm)",
-                    page_count, width_mm, height_mm
-                ),
-                "⚡ Ultra-fast parsing: Byte-level search (PDF.js method)".to_string(),
-            ];
-            
-            return Ok(EstimateResult {
-                page_count,
-                page_sizes: vec![PageSizeMm { width_mm, height_mm }; page_count],
-                notes,
-            });
+            // Check the character after "Page" is not 's'
+            if !after_page.starts_with('s') {
+                page_count += 1;
+            }
         }
+        
+        search_pos = abs_pos + 5; // Move past "/Type"
     }
     
-    // If ultra-fast parsing failed, return error
-    Err(EstimatorError::PdfError(
-        "Could not extract page count from PDF. The PDF may be encrypted, corrupted, or use a non-standard structure.".to_string()
-    ))
+    if page_count == 0 {
+        return Err(EstimatorError::PdfError(
+            "No pages found in PDF. File may be corrupted or use an unsupported format.".to_string(),
+        ));
+    }
+    
+    // Use A4 as default page size for PDFs
+    let (width_mm, height_mm) = a4_mm();
+    
+    Ok(EstimateResult {
+        page_count,
+        page_sizes: vec![PageSizeMm { width_mm, height_mm }; page_count],
+        notes: vec![
+            format!("PDF has {} pages (estimated using simple parsing)", page_count),
+            "⚠ For more accurate results, use the async estimate_pdf_with_pdfjs function".to_string(),
+        ],
+    })
 }
 

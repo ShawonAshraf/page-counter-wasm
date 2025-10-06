@@ -20,10 +20,10 @@
 //! - **Markdown**: Estimates pages considering markdown formatting
 
 use crate::estimators::{
-    estimate_markdown_pages, estimate_pdf_pages, estimate_text_pages, estimate_xlsx_pages,
+    count_pdf_pages_js, estimate_markdown_pages, estimate_pdf_pages, estimate_text_pages,
+    estimate_xlsx_pages,
 };
 use crate::file_utils::{detect_type, mm_from_pt};
-use crate::pdfjs_bindings;
 use crate::schema::{EstimateOptions, EstimateResult, PageSizeMm};
 use base64::Engine;
 use serde_json::json;
@@ -219,7 +219,7 @@ pub fn estimate_document(
 #[wasm_bindgen]
 pub async fn estimate_pdf_with_pdfjs(bytes: Vec<u8>) -> JsValue {
     // Try PDF.js first (fast and reliable)
-    match pdfjs_bindings::count_pdf_pages_js(&bytes).await {
+    match count_pdf_pages_js(&bytes).await {
         Ok(js_result) => {
             // Parse the JSON result from PDF.js
             if let Some(json_str) = js_result.as_string() {
