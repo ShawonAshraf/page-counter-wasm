@@ -1,0 +1,500 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Page Counter - WebAssembly</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+
+        .container {
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            max-width: 600px;
+            width: 100%;
+            padding: 40px;
+        }
+
+        h1 {
+            color: #333;
+            margin-bottom: 10px;
+            font-size: 28px;
+            text-align: center;
+        }
+
+        .subtitle {
+            color: #666;
+            text-align: center;
+            margin-bottom: 30px;
+            font-size: 14px;
+        }
+
+        .upload-area {
+            border: 3px dashed #667eea;
+            border-radius: 15px;
+            padding: 40px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            background: #f8f9ff;
+        }
+
+        .upload-area:hover {
+            background: #f0f2ff;
+            border-color: #764ba2;
+        }
+
+        .upload-area.dragging {
+            background: #e8ebff;
+            border-color: #764ba2;
+            transform: scale(1.02);
+        }
+
+        .upload-icon {
+            font-size: 48px;
+            margin-bottom: 15px;
+        }
+
+        .upload-text {
+            color: #667eea;
+            font-size: 16px;
+            font-weight: 600;
+            margin-bottom: 8px;
+        }
+
+        .upload-hint {
+            color: #999;
+            font-size: 13px;
+        }
+
+        input[type="file"] {
+            display: none;
+        }
+
+        .file-info {
+            margin-top: 20px;
+            padding: 15px;
+            background: #f8f9ff;
+            border-radius: 10px;
+            display: none;
+        }
+
+        .file-info.show {
+            display: block;
+        }
+
+        .file-name {
+            color: #333;
+            font-weight: 600;
+            margin-bottom: 5px;
+            word-break: break-all;
+        }
+
+        .file-size {
+            color: #666;
+            font-size: 13px;
+        }
+
+        .results {
+            margin-top: 25px;
+            display: none;
+        }
+
+        .results.show {
+            display: block;
+        }
+
+        .result-card {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 25px;
+            border-radius: 15px;
+            margin-bottom: 15px;
+        }
+
+        .result-label {
+            font-size: 13px;
+            opacity: 0.9;
+            margin-bottom: 5px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .result-value {
+            font-size: 36px;
+            font-weight: bold;
+        }
+
+        .notes {
+            background: #fff3cd;
+            border-left: 4px solid #ffc107;
+            padding: 15px;
+            border-radius: 8px;
+            margin-top: 15px;
+        }
+
+        .notes-title {
+            color: #856404;
+            font-weight: 600;
+            margin-bottom: 8px;
+            font-size: 14px;
+        }
+
+        .notes ul {
+            list-style: none;
+            color: #856404;
+        }
+
+        .notes li {
+            padding: 5px 0;
+            font-size: 13px;
+        }
+
+        .notes li:before {
+            content: "• ";
+            margin-right: 5px;
+        }
+
+        .error {
+            background: #f8d7da;
+            border-left: 4px solid #dc3545;
+            color: #721c24;
+            padding: 15px;
+            border-radius: 8px;
+            margin-top: 15px;
+        }
+
+        .error-title {
+            font-weight: 600;
+            margin-bottom: 5px;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 20px;
+            color: #667eea;
+            display: none;
+        }
+
+        .loading.show {
+            display: block;
+        }
+
+        .spinner {
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #667eea;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 10px;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .page-sizes {
+            background: #e8f5e9;
+            border-left: 4px solid #4caf50;
+            padding: 15px;
+            border-radius: 8px;
+            margin-top: 15px;
+        }
+
+        .page-sizes-title {
+            color: #2e7d32;
+            font-weight: 600;
+            margin-bottom: 8px;
+            font-size: 14px;
+        }
+
+        .page-sizes-content {
+            color: #2e7d32;
+            font-size: 13px;
+            max-height: 200px;
+            overflow-y: auto;
+        }
+
+        .reset-btn {
+            background: #667eea;
+            color: white;
+            border: none;
+            padding: 12px 30px;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            margin-top: 20px;
+            width: 100%;
+        }
+
+        .reset-btn:hover {
+            background: #764ba2;
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.2);
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>📄 Page Counter</h1>
+        <p class="subtitle">Upload your document to count pages (PDF, XLSX, TXT, MD)</p>
+
+        <div class="upload-area" id="uploadArea">
+            <div class="upload-icon">📎</div>
+            <div class="upload-text">Click to upload or drag & drop</div>
+            <div class="upload-hint">Supports PDF, XLSX, TXT, and Markdown files</div>
+        </div>
+
+        <input type="file" id="fileInput" accept=".pdf,.xlsx,.xls,.txt,.md" />
+
+        <div class="file-info" id="fileInfo">
+            <div class="file-name" id="fileName"></div>
+            <div class="file-size" id="fileSize"></div>
+        </div>
+
+        <div class="loading" id="loading">
+            <div class="spinner"></div>
+            <div>Processing your document...</div>
+        </div>
+
+        <div class="results" id="results">
+            <div class="result-card">
+                <div class="result-label">Estimated Page Count</div>
+                <div class="result-value" id="pageCount">-</div>
+            </div>
+
+            <div id="notesSection" style="display: none;">
+                <div class="notes">
+                    <div class="notes-title">📝 Notes</div>
+                    <ul id="notesList"></ul>
+                </div>
+            </div>
+
+            <div id="pageSizesSection" style="display: none;">
+                <div class="page-sizes">
+                    <div class="page-sizes-title">📐 Page Sizes</div>
+                    <div class="page-sizes-content" id="pageSizesList"></div>
+                </div>
+            </div>
+
+            <div id="errorSection" style="display: none;">
+                <div class="error">
+                    <div class="error-title">⚠️ Error</div>
+                    <div id="errorMessage"></div>
+                </div>
+            </div>
+
+            <button class="reset-btn" id="resetBtn">Upload Another File</button>
+        </div>
+    </div>
+
+    <script type="module">
+        import init, { estimate_document } from './pkg/page_counter_wasm.js';
+
+        let wasmInitialized = false;
+
+        // Initialize WASM
+        async function initWasm() {
+            if (!wasmInitialized) {
+                try {
+                    await init();
+                    wasmInitialized = true;
+                    console.log('WASM initialized successfully');
+                } catch (error) {
+                    console.error('Failed to initialize WASM:', error);
+                    showError('Failed to initialize the page counter module. Please refresh the page.');
+                }
+            }
+        }
+
+        // Initialize on page load
+        initWasm();
+
+        // DOM elements
+        const uploadArea = document.getElementById('uploadArea');
+        const fileInput = document.getElementById('fileInput');
+        const fileInfo = document.getElementById('fileInfo');
+        const fileName = document.getElementById('fileName');
+        const fileSize = document.getElementById('fileSize');
+        const loading = document.getElementById('loading');
+        const results = document.getElementById('results');
+        const pageCount = document.getElementById('pageCount');
+        const notesSection = document.getElementById('notesSection');
+        const notesList = document.getElementById('notesList');
+        const pageSizesSection = document.getElementById('pageSizesSection');
+        const pageSizesList = document.getElementById('pageSizesList');
+        const errorSection = document.getElementById('errorSection');
+        const errorMessage = document.getElementById('errorMessage');
+        const resetBtn = document.getElementById('resetBtn');
+
+        // Click to upload
+        uploadArea.addEventListener('click', () => {
+            fileInput.click();
+        });
+
+        // File selection
+        fileInput.addEventListener('change', (e) => {
+            if (e.target.files.length > 0) {
+                handleFile(e.target.files[0]);
+            }
+        });
+
+        // Drag and drop
+        uploadArea.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            uploadArea.classList.add('dragging');
+        });
+
+        uploadArea.addEventListener('dragleave', () => {
+            uploadArea.classList.remove('dragging');
+        });
+
+        uploadArea.addEventListener('drop', (e) => {
+            e.preventDefault();
+            uploadArea.classList.remove('dragging');
+            if (e.dataTransfer.files.length > 0) {
+                handleFile(e.dataTransfer.files[0]);
+            }
+        });
+
+        // Reset button
+        resetBtn.addEventListener('click', () => {
+            fileInput.value = '';
+            fileInfo.classList.remove('show');
+            results.classList.remove('show');
+            uploadArea.style.display = 'block';
+        });
+
+        // Handle file upload
+        async function handleFile(file) {
+            // Ensure WASM is initialized
+            await initWasm();
+            if (!wasmInitialized) return;
+
+            // Show file info
+            fileName.textContent = file.name;
+            fileSize.textContent = formatFileSize(file.size);
+            fileInfo.classList.add('show');
+
+            // Hide upload area and show loading
+            uploadArea.style.display = 'none';
+            loading.classList.add('show');
+            results.classList.remove('show');
+
+            try {
+                // Read file as array buffer
+                const arrayBuffer = await file.arrayBuffer();
+                const bytes = new Uint8Array(arrayBuffer);
+
+                // Call WASM function
+                const resultJson = estimate_document(bytes, file.name, null);
+                
+                // Parse result
+                const result = JSON.parse(resultJson);
+
+                // Hide loading
+                loading.classList.remove('show');
+
+                // Check for errors
+                if (result.error) {
+                    showError(result.error);
+                } else {
+                    showResults(result);
+                }
+            } catch (error) {
+                loading.classList.remove('show');
+                showError('Failed to process file: ' + error.message);
+                console.error('Error processing file:', error);
+            }
+        }
+
+        // Show results
+        function showResults(result) {
+            // Show page count
+            pageCount.textContent = result.page_count;
+
+            // Show notes if available
+            if (result.notes && result.notes.length > 0) {
+                notesList.innerHTML = result.notes.map(note => `<li>${note}</li>`).join('');
+                notesSection.style.display = 'block';
+            } else {
+                notesSection.style.display = 'none';
+            }
+
+            // Show page sizes if available
+            if (result.page_sizes && result.page_sizes.length > 0) {
+                const uniqueSizes = getUniqueSizes(result.page_sizes);
+                if (uniqueSizes.length === 1) {
+                    pageSizesList.textContent = `All pages: ${uniqueSizes[0].width_mm.toFixed(1)} × ${uniqueSizes[0].height_mm.toFixed(1)} mm`;
+                } else {
+                    pageSizesList.innerHTML = result.page_sizes
+                        .slice(0, 10)
+                        .map((size, idx) => `Page ${idx + 1}: ${size.width_mm.toFixed(1)} × ${size.height_mm.toFixed(1)} mm`)
+                        .join('<br>');
+                    if (result.page_sizes.length > 10) {
+                        pageSizesList.innerHTML += `<br>... and ${result.page_sizes.length - 10} more pages`;
+                    }
+                }
+                pageSizesSection.style.display = 'block';
+            } else {
+                pageSizesSection.style.display = 'none';
+            }
+
+            errorSection.style.display = 'none';
+            results.classList.add('show');
+        }
+
+        // Show error
+        function showError(message) {
+            errorMessage.textContent = message;
+            errorSection.style.display = 'block';
+            notesSection.style.display = 'none';
+            pageSizesSection.style.display = 'none';
+            pageCount.textContent = '-';
+            results.classList.add('show');
+        }
+
+        // Get unique page sizes
+        function getUniqueSizes(sizes) {
+            const unique = [];
+            for (const size of sizes) {
+                if (!unique.some(s => 
+                    Math.abs(s.width_mm - size.width_mm) < 0.1 && 
+                    Math.abs(s.height_mm - size.height_mm) < 0.1
+                )) {
+                    unique.push(size);
+                }
+            }
+            return unique;
+        }
+
+        // Format file size
+        function formatFileSize(bytes) {
+            if (bytes === 0) return '0 Bytes';
+            const k = 1024;
+            const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return Math.round(bytes / Math.pow(k, i) * 100) / 100 + ' ' + sizes[i];
+        }
+    </script>
+</body>
+</html>
