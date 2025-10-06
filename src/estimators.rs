@@ -19,10 +19,10 @@
 //!
 //! The estimators respect user-provided options for paper sizes and other parameters.
 
-use crate::file_utils::{a4_mm, letter_mm, mm_from_pt, obj_to_f64};
+use crate::ultra_fast_pdf;
+use crate::file_utils::{a4_mm, letter_mm, mm_from_pt};
 use crate::schema::{EstimateOptions, EstimateResult, EstimatorError, PageSizeMm};
 use calamine::{Data, Reader, Xlsx};
-use lopdf::Document as LopdfDocument;
 use std::io::Cursor;
 
 /// Estimates the number of pages for a plain text file.
@@ -313,189 +313,46 @@ pub fn estimate_pdf_pages(
     bytes: &[u8],
     _options: &EstimateOptions,
 ) -> Result<EstimateResult, EstimatorError> {
-    // parse with lopdf
-    let doc =
-        LopdfDocument::load_mem(bytes).map_err(|e| EstimatorError::PdfError(format!("{:?}", e)))?;
-
-    // OPTIMIZATION: Try to get page count and MediaBox directly from catalog
-    // This avoids building the entire page tree, which is much faster
-    if let Ok(catalog) = doc.catalog() {
-        if let Ok(pages_ref) = catalog.get(b"Pages") {
-            if let Ok(pages_id) = pages_ref.as_reference() {
-                if let Ok(pages_obj) = doc.get_object(pages_id) {
-                    if let lopdf::Object::Dictionary(pages_dict) = pages_obj {
-                        // Try to get /Count (total page count)
-                        if let Ok(count_obj) = pages_dict.get(b"Count") {
-                            if let Ok(page_count) = count_obj.as_i64() {
-                                let page_count = page_count as usize;
-                                
-                                if page_count == 0 {
-                                    return Ok(EstimateResult {
-                                        page_count: 0,
-                                        page_sizes: vec![],
-                                        notes: vec!["PDF has no pages".to_string()],
-                                    });
-                                }
-                                
-                                // Try to get inherited MediaBox from root Pages object
-                                let mut dimensions = None;
-                                if let Ok(mediabox_obj) = pages_dict.get(b"MediaBox") {
-                                    dimensions = parse_box_dimensions(mediabox_obj);
-                                }
-                                
-                                // If no inherited MediaBox, try first page
-                                if dimensions.is_none() {
-                                    if let Ok(kids_obj) = pages_dict.get(b"Kids") {
-                                        if let lopdf::Object::Array(kids) = kids_obj {
-                                            if !kids.is_empty() {
-                                                if let Ok(first_page_id) = kids[0].as_reference() {
-                                                    dimensions = Some(extract_page_dimensions(&doc, first_page_id));
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                                
-                                // Use extracted or default dimensions
-                                let (width_pts, height_pts) = dimensions.unwrap_or((595.0, 842.0));
-                                let width_mm = mm_from_pt(width_pts);
-                                let height_mm = mm_from_pt(height_pts);
-                                
-                                let notes = vec![
-                                    format!(
-                                        "PDF has {} pages (uniform size: {:.1} × {:.1} mm)",
-                                        page_count, width_mm, height_mm
-                                    ),
-                                    "Performance optimization: Direct catalog access (fast path)".to_string(),
-                                ];
-                                
-                                return Ok(EstimateResult {
-                                    page_count,
-                                    page_sizes: vec![PageSizeMm { width_mm, height_mm }; page_count],
-                                    notes,
-                                });
-                            }
-                        }
-                    }
-                }
-            }
+    // Safety check for empty input
+    if bytes.is_empty() {
+        return Err(EstimatorError::PdfError("PDF file is empty".to_string()));
+    }
+    
+    // Safety check for reasonable file size (max 500MB to prevent memory issues)
+    if bytes.len() > 500_000_000 {
+        return Err(EstimatorError::PdfError("PDF file too large (>500MB)".to_string()));
+    }
+    
+    // ULTRA FAST PATH: Byte-level search (PDF.js approach)
+    // Works directly on bytes without UTF-8 validation for maximum speed
+    if let Some(page_count) = ultra_fast_pdf::count_pages_ultra_fast(bytes) {
+        if page_count > 0 && page_count <= 100_000 {
+            // Try to get page dimensions
+            let (width_pts, height_pts) = ultra_fast_pdf::extract_mediabox_ultra_fast(bytes)
+                .unwrap_or((595.0, 842.0)); // Default to A4
+            
+            let width_mm = mm_from_pt(width_pts);
+            let height_mm = mm_from_pt(height_pts);
+            
+            let notes = vec![
+                format!(
+                    "PDF has {} pages (dimensions: {:.1} × {:.1} mm)",
+                    page_count, width_mm, height_mm
+                ),
+                "⚡ Ultra-fast parsing: Byte-level search (PDF.js method)".to_string(),
+            ];
+            
+            return Ok(EstimateResult {
+                page_count,
+                page_sizes: vec![PageSizeMm { width_mm, height_mm }; page_count],
+                notes,
+            });
         }
     }
     
-    // FALLBACK: Use slower page tree iteration
-    // This happens for non-standard PDFs or if catalog access failed
-    let pages_tree = doc.get_pages();
-    let page_count = pages_tree.len();
-    
-    if page_count == 0 {
-        return Ok(EstimateResult {
-            page_count: 0,
-            page_sizes: vec![],
-            notes: vec!["PDF has no pages".to_string()],
-        });
-    }
-
-    let mut notes = Vec::new();
-    notes.push("Performance: Using fallback page tree iteration".to_string());
-    
-    // For fallback, use smart sampling
-    let sample_size = if page_count > 100 { 1 } else { page_count.min(5) };
-    
-    let sampled_dims: Vec<(f64, f64)> = pages_tree
-        .iter()
-        .take(sample_size)
-        .map(|(_, page_id)| extract_page_dimensions(&doc, *page_id))
-        .collect();
-    
-    let first_dim = sampled_dims[0];
-    let uniform = sampled_dims.iter().all(|(w, h)| {
-        (w - first_dim.0).abs() < 0.1 && (h - first_dim.1).abs() < 0.1
-    });
-    
-    let page_sizes = if uniform {
-        let width_mm = mm_from_pt(first_dim.0);
-        let height_mm = mm_from_pt(first_dim.1);
-        
-        notes.push(format!(
-            "PDF has {} pages (uniform size: {:.1} × {:.1} mm)",
-            page_count, width_mm, height_mm
-        ));
-        
-        vec![PageSizeMm { width_mm, height_mm }; page_count]
-    } else {
-        notes.push(format!(
-            "PDF has {} pages with mixed sizes",
-            page_count
-        ));
-        
-        pages_tree
-            .iter()
-            .map(|(pnum, page_id)| {
-                let (width_pts, height_pts) = extract_page_dimensions(&doc, *page_id);
-                let width_mm = mm_from_pt(width_pts);
-                let height_mm = mm_from_pt(height_pts);
-                
-                if page_count <= 20 {
-                    notes.push(format!(
-                        "Page {}: {:.1} × {:.1} mm",
-                        pnum, width_mm, height_mm
-                    ));
-                }
-                
-                PageSizeMm { width_mm, height_mm }
-            })
-            .collect()
-    };
-
-    Ok(EstimateResult {
-        page_count,
-        page_sizes,
-        notes,
-    })
+    // If ultra-fast parsing failed, return error
+    Err(EstimatorError::PdfError(
+        "Could not extract page count from PDF. The PDF may be encrypted, corrupted, or use a non-standard structure.".to_string()
+    ))
 }
 
-/// Helper function to extract page dimensions (width, height) in points.
-///
-/// Attempts to read MediaBox or CropBox from the page dictionary.
-/// Falls back to A4 size (595×842 points) if dimensions cannot be extracted.
-fn extract_page_dimensions(doc: &LopdfDocument, page_id: (u32, u16)) -> (f64, f64) {
-    let default_pts = (595.0_f64, 842.0_f64); // A4 in points
-    let mut width_pts = default_pts.0;
-    let mut height_pts = default_pts.1;
-
-    if let Ok(obj) = doc.get_object(page_id) {
-        if let lopdf::Object::Dictionary(page_dict) = obj {
-            // Try MediaBox first
-            if let Ok(mediabox_obj) = page_dict.get(b"MediaBox") {
-                if let Some((w, h)) = parse_box_dimensions(mediabox_obj) {
-                    width_pts = w;
-                    height_pts = h;
-                }
-            } else if let Ok(cropbox_obj) = page_dict.get(b"CropBox") {
-                // Fallback to CropBox
-                if let Some((w, h)) = parse_box_dimensions(cropbox_obj) {
-                    width_pts = w;
-                    height_pts = h;
-                }
-            }
-        }
-    }
-
-    (width_pts, height_pts)
-}
-
-/// Helper function to parse a PDF box (MediaBox or CropBox) into (width, height).
-fn parse_box_dimensions(box_obj: &lopdf::Object) -> Option<(f64, f64)> {
-    if let lopdf::Object::Array(vals) = box_obj {
-        if vals.len() == 4 {
-            let x0 = obj_to_f64(&vals[0]);
-            let y0 = obj_to_f64(&vals[1]);
-            let x1 = obj_to_f64(&vals[2]);
-            let y1 = obj_to_f64(&vals[3]);
-            let width = (x1 - x0).abs();
-            let height = (y1 - y0).abs();
-            return Some((width, height));
-        }
-    }
-    None
-}

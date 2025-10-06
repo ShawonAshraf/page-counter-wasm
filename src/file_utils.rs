@@ -102,27 +102,3 @@ pub fn detect_type(filename: Option<&str>, bytes: &[u8]) -> String {
     "unknown".into()
 }
 
-/// Converts a lopdf Object to a 64-bit floating point number.
-///
-/// # Arguments
-///
-/// * `obj` - A reference to a lopdf Object to convert
-///
-/// # Returns
-///
-/// The numeric value as f64:
-/// - For `Object::Integer`: the integer value cast to f64
-/// - For `Object::Real`: the real value cast to f64
-/// - For all other object types: 0.0
-///
-/// # Use Case
-///
-/// This is commonly used when extracting numeric values from PDF objects,
-/// such as page dimensions, font sizes, or coordinate values.
-pub fn obj_to_f64(obj: &lopdf::Object) -> f64 {
-    match obj {
-        lopdf::Object::Integer(i) => *i as f64,
-        lopdf::Object::Real(r) => *r as f64,
-        _ => 0.0,
-    }
-}
