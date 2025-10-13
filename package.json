@@ -7,7 +7,8 @@
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "dev": "python3 -m http.server 8000",
-    "build": "wasm-pack build --target web"
+    "build": "wasm-pack build --target web",
+    "serve": "http-server . -p 8000"
   },
   "repository": {
     "type": "git",
@@ -28,5 +29,8 @@
   "homepage": "https://github.com/AskTuringAI/page-counter-wasm#readme",
   "optionalDependencies": {
     "pdfjs-dist": "^5.4.296"
+  },
+  "dependencies": {
+    "http-server": "^14.1.1"
   }
 }
