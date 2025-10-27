@@ -9,19 +9,21 @@
 //! - `estimate_document_base64`: Accepts base64-encoded document data
 //! - `estimate_document`: Accepts raw byte arrays
 //!
-//! Both functions automatically detect the document type (PDF, XLSX, TXT, Markdown) and
+//! Both functions automatically detect the document type (PDF, XLSX, DOCX, PPTX, TXT, Markdown) and
 //! apply the appropriate estimation algorithm.
 //!
 //! ## Supported Formats
 //!
 //! - **PDF**: Uses PDF structure analysis to count pages
 //! - **XLSX**: Counts worksheets in Excel files
+//! - **DOCX**: Extracts page count from Word document metadata
+//! - **PPTX**: Counts slides in PowerPoint presentations
 //! - **TXT**: Estimates pages based on character count and formatting
 //! - **Markdown**: Estimates pages considering markdown formatting
 
 use crate::estimators::{
     count_pdf_pages_js, estimate_markdown_pages, estimate_pdf_pages, estimate_text_pages,
-    estimate_xlsx_pages,
+    estimate_xlsx_pages, estimate_docx_pages, estimate_pptx_pages,
 };
 use crate::file_utils::{detect_type, mm_from_pt};
 use crate::schema::{EstimateOptions, EstimateResult, PageSizeMm};
@@ -121,9 +123,9 @@ pub fn estimate_document_base64(
 ///
 /// Returns a JSON object containing:
 /// - `pages` (number): The estimated page count
-/// - `format` (string): Detected document format ("pdf", "xlsx", "txt", "markdown")
+/// - `format` (string): Detected document format ("pdf", "xlsx", "docx", "pptx", "txt", "markdown")
 /// - `confidence` (optional number): Estimation confidence score
-/// - Additional format-specific fields (e.g., sheet count for XLSX)
+/// - Additional format-specific fields (e.g., sheet count for XLSX, slide count for PPTX)
 ///
 /// ## Error Response
 ///
@@ -142,6 +144,8 @@ pub fn estimate_document_base64(
 ///
 /// - **PDF**: Counts pages using PDF structure markers (`/Type /Page`)
 /// - **XLSX**: Counts worksheets in the Excel workbook
+/// - **DOCX**: Extracts page count from Word document metadata (exact count)
+/// - **PPTX**: Counts slides in PowerPoint presentations (exact count)
 /// - **TXT**: Estimates based on character count, line breaks, and page size settings
 /// - **Markdown**: Estimates considering markdown syntax and rendered output
 ///
@@ -196,6 +200,14 @@ pub fn estimate_document(
             Ok(r) => Ok(r),
             Err(err) => Err(err.to_string()),
         },
+        "docx" => match estimate_docx_pages(bytes, &options) {
+            Ok(r) => Ok(r),
+            Err(err) => Err(err.to_string()),
+        },
+        "pptx" => match estimate_pptx_pages(bytes, &options) {
+            Ok(r) => Ok(r),
+            Err(err) => Err(err.to_string()),
+        },
         "txt" => Ok(estimate_text_pages(bytes, &options)),
         "markdown" => Ok(estimate_markdown_pages(bytes, &options)),
         other => Err(format!("Unsupported or unrecognized format: {}", other)),
@@ -222,35 +234,39 @@ pub async fn estimate_pdf_with_pdfjs(bytes: Vec<u8>) -> JsValue {
     match count_pdf_pages_js(&bytes).await {
         Ok(js_result) => {
             // Parse the JSON result from PDF.js
-            if let Some(json_str) = js_result.as_string() {
-                if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&json_str) {
-                    let page_count = parsed["page_count"].as_u64().unwrap_or(0) as usize;
-                    let width_pt = parsed["width_pt"].as_f64().unwrap_or(595.0);
-                    let height_pt = parsed["height_pt"].as_f64().unwrap_or(842.0);
-                    
-                    let width_mm = mm_from_pt(width_pt);
-                    let height_mm = mm_from_pt(height_pt);
-                    
-                    let result = EstimateResult {
-                        page_count,
-                        page_sizes: vec![PageSizeMm { width_mm, height_mm }; page_count],
-                        notes: vec![
-                            format!("PDF has {} pages (dimensions: {:.1} × {:.1} mm)", 
-                                page_count, width_mm, height_mm),
-                            "⚡ Using PDF.js (fast and reliable)".to_string(),
-                        ],
-                    };
-                    
-                    match serde_json::to_string(&result) {
-                        Ok(s) => return JsValue::from_str(&s),
-                        Err(_) => {}
+            match js_result.as_string() {
+                Some(json_str) => {
+                    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&json_str) {
+                        let page_count = parsed["page_count"].as_u64().unwrap_or(0) as usize;
+                        let width_pt = parsed["width_pt"].as_f64().unwrap_or(595.0);
+                        let height_pt = parsed["height_pt"].as_f64().unwrap_or(842.0);
+                        
+                        let width_mm = mm_from_pt(width_pt);
+                        let height_mm = mm_from_pt(height_pt);
+                        
+                        let result = EstimateResult {
+                            page_count,
+                            page_sizes: vec![PageSizeMm { width_mm, height_mm }; page_count],
+                            notes: vec![
+                                format!("PDF has {} pages (dimensions: {:.1} × {:.1} mm)", 
+                                    page_count, width_mm, height_mm),
+                                "⚡ Using PDF.js (fast and reliable)".to_string(),
+                            ],
+                        };
+                        
+                        match serde_json::to_string(&result) {
+                            Ok(s) => return JsValue::from_str(&s),
+                            Err(_) => {}
+                        }
                     }
                 }
+                None => {}
             }
         }
         Err(e) => {
             // PDF.js failed, log and fall back to Rust parser
-            web_sys::console::log_1(&format!("PDF.js not available, using Rust parser: {:?}", e).into());
+            let error_msg = format!("PDF.js not available, using Rust parser: {:?}", e);
+            web_sys::console::log_1(&error_msg.into());
         }
     }
     
