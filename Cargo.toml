@@ -28,3 +28,5 @@ wasm-bindgen = "0.2.104"
 wasm-bindgen-futures = "0.4"
 web-sys = { version = "0.3", features = ["console"] }
 base64 = "0.22"
+zip = { version = "2.2", default-features = false, features = ["deflate"] }
+quick-xml = "0.37"

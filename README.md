@@ -1,7 +1,7 @@
 # page-counter-wasm
 
-A rust web-assembly module to count pages from uploaded documents (pdf, xlsx, txt and markdown) in the frontend. The
-module embeds pdfjs inside wasm to parse pdf and pure rust methods for excel, txt and markdown file parsing.
+A rust web-assembly module to count pages from uploaded documents (pdf, xlsx, docx, pptx, txt and markdown) in the frontend. The
+module embeds pdfjs inside wasm to parse pdf and pure rust methods for excel, word documents, powerpoint presentations, txt and markdown file parsing.
 
 ## pre-requisites
 

@@ -9,6 +9,8 @@
 //! - **Text files** (`.txt`) - estimated based on character count
 //! - **Markdown files** (`.md`) - treated similarly to text files
 //! - **Excel files** (`.xlsx`) - estimated based on row count per sheet
+//! - **Word documents** (`.docx`) - exact page count from metadata or estimated from content
+//! - **PowerPoint presentations** (`.pptx`) - exact slide count from metadata
 //! - **PDF files** (`.pdf`) - exact page count extracted from document structure
 //!
 //! ## Estimation Strategy
@@ -22,8 +24,18 @@
 use crate::file_utils::{a4_mm, letter_mm};
 use crate::schema::{EstimateOptions, EstimateResult, EstimatorError, PageSizeMm};
 use calamine::{Data, Reader, Xlsx};
-use std::io::Cursor;
+use std::io::{Cursor, Read};
 use wasm_bindgen::prelude::*;
+use zip::ZipArchive;
+use quick_xml::Reader as XmlReader;
+use quick_xml::events::Event;
+
+// Placeholder for PDF.js integration (optional feature)
+// Note: PDF.js integration can be added separately via JavaScript
+// For now, the synchronous PDF parser works fine
+pub async fn count_pdf_pages_js(_bytes: &[u8]) -> Result<JsValue, JsValue> {
+    Err(JsValue::from_str("PDF.js not integrated"))
+}
 
 
 /// Estimates the number of pages for a plain text file.
@@ -324,6 +336,298 @@ pub fn estimate_pdf_pages(
         notes: vec![
             format!("PDF has {} pages (estimated using simple parsing)", page_count),
             "⚠ For more accurate results, use the async estimate_pdf_with_pdfjs function".to_string(),
+        ],
+    })
+}
+
+/// Estimates the number of pages in a Word document (.docx).
+///
+/// This function parses the DOCX file (which is a ZIP archive) and extracts the
+/// page count from the `docProps/app.xml` metadata file. DOCX files store their
+/// page count in the `<Pages>` element of this XML file.
+///
+/// # Parameters
+///
+/// * `bytes` - The raw DOCX file bytes
+/// * `options` - Estimation options including paper size preferences
+///
+/// # Returns
+///
+/// Returns `Ok(EstimateResult)` containing the exact page count from document metadata,
+/// or `Err(EstimatorError)` if the file cannot be parsed or page count cannot be determined.
+///
+/// # Notes
+///
+/// - The page count is extracted directly from document metadata (exact count)
+/// - If the metadata doesn't contain page count, attempts to estimate from content
+/// - Paper size is set based on options or defaults to A4
+pub fn estimate_docx_pages(
+    bytes: &[u8],
+    options: &EstimateOptions,
+) -> Result<EstimateResult, EstimatorError> {
+    let cursor = Cursor::new(bytes);
+    let mut archive = ZipArchive::new(cursor)
+        .map_err(|e| EstimatorError::General(format!("Failed to open DOCX as ZIP: {:?}", e)))?;
+    
+    // Try to read page count from docProps/app.xml
+    let page_count_result = {
+        match archive.by_name("docProps/app.xml") {
+            Ok(mut file) => {
+                let mut contents = String::new();
+                match file.read_to_string(&mut contents) {
+                    Ok(_) => Some(parse_pages_from_app_xml(&contents)),
+                    Err(e) => Some(Err(EstimatorError::General(format!("Failed to read app.xml: {:?}", e)))),
+                }
+            }
+            Err(_) => None,
+        }
+    };
+    
+    let page_count = match page_count_result {
+        Some(Ok(count)) => count,
+        Some(Err(e)) => return Err(e),
+        None => {
+            // If app.xml doesn't exist, try to estimate from content
+            return estimate_docx_from_content(&mut archive, options);
+        }
+    };
+    
+    // Determine paper size
+    let (w, h) = if let Some(custom) = options.custom_paper_mm {
+        custom
+    } else if let Some(ref def) = options.default_paper {
+        match def.as_str() {
+            "Letter" | "letter" => letter_mm(),
+            _ => a4_mm(),
+        }
+    } else {
+        a4_mm()
+    };
+    
+    Ok(EstimateResult {
+        page_count,
+        page_sizes: vec![PageSizeMm { width_mm: w, height_mm: h }; page_count],
+        notes: vec![
+            format!("DOCX document has {} pages (from metadata)", page_count),
+        ],
+    })
+}
+
+/// Estimates the number of slides in a PowerPoint presentation (.pptx).
+///
+/// This function parses the PPTX file (which is a ZIP archive) and extracts the
+/// slide count from the `docProps/app.xml` metadata file. PPTX files store their
+/// slide count in the `<Slides>` element of this XML file.
+///
+/// # Parameters
+///
+/// * `bytes` - The raw PPTX file bytes
+/// * `options` - Estimation options (paper size is set to standard presentation size)
+///
+/// # Returns
+///
+/// Returns `Ok(EstimateResult)` containing the exact slide count from document metadata,
+/// or `Err(EstimatorError)` if the file cannot be parsed or slide count cannot be determined.
+///
+/// # Notes
+///
+/// - The slide count is extracted directly from document metadata (exact count)
+/// - Each slide is considered as one "page" for printing purposes
+/// - Uses standard presentation dimensions (10" × 7.5" / 254mm × 190.5mm)
+pub fn estimate_pptx_pages(
+    bytes: &[u8],
+    _options: &EstimateOptions,
+) -> Result<EstimateResult, EstimatorError> {
+    let cursor = Cursor::new(bytes);
+    let mut archive = ZipArchive::new(cursor)
+        .map_err(|e| EstimatorError::General(format!("Failed to open PPTX as ZIP: {:?}", e)))?;
+    
+    // Try to read slide count from docProps/app.xml
+    let slide_count_result = {
+        match archive.by_name("docProps/app.xml") {
+            Ok(mut file) => {
+                let mut contents = String::new();
+                match file.read_to_string(&mut contents) {
+                    Ok(_) => Some(parse_slides_from_app_xml(&contents)),
+                    Err(e) => Some(Err(EstimatorError::General(format!("Failed to read app.xml: {:?}", e)))),
+                }
+            }
+            Err(_) => None,
+        }
+    };
+    
+    let slide_count = match slide_count_result {
+        Some(Ok(count)) => count,
+        Some(Err(e)) => return Err(e),
+        None => {
+            // If app.xml doesn't exist, try to count slide files
+            return estimate_pptx_from_content(&mut archive);
+        }
+    };
+    
+    // Standard PowerPoint slide dimensions: 10" × 7.5" (254mm × 190.5mm)
+    let (w, h) = (254.0, 190.5);
+    
+    Ok(EstimateResult {
+        page_count: slide_count,
+        page_sizes: vec![PageSizeMm { width_mm: w, height_mm: h }; slide_count],
+        notes: vec![
+            format!("PPTX presentation has {} slides (from metadata)", slide_count),
+        ],
+    })
+}
+
+/// Helper function to parse page count from app.xml content
+fn parse_pages_from_app_xml(xml_content: &str) -> Result<usize, EstimatorError> {
+    let mut reader = XmlReader::from_str(xml_content);
+    reader.config_mut().trim_text(true);
+    let mut buf = Vec::new();
+    let mut in_pages = false;
+    
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(ref e)) | Ok(Event::Empty(ref e)) => {
+                if e.name().as_ref() == b"Pages" {
+                    in_pages = true;
+                }
+            }
+            Ok(Event::Text(e)) => {
+                if in_pages {
+                    let text = e.unescape()
+                        .map_err(|e| EstimatorError::General(format!("XML unescape error: {:?}", e)))?;
+                    let page_count = text.parse::<usize>()
+                        .map_err(|e| EstimatorError::General(format!("Failed to parse page count: {:?}", e)))?;
+                    return Ok(page_count);
+                }
+            }
+            Ok(Event::End(ref e)) => {
+                if e.name().as_ref() == b"Pages" {
+                    in_pages = false;
+                }
+            }
+            Ok(Event::Eof) => break,
+            Err(e) => return Err(EstimatorError::General(format!("XML parse error: {:?}", e))),
+            _ => {}
+        }
+        buf.clear();
+    }
+    
+    Err(EstimatorError::General("No page count found in app.xml".to_string()))
+}
+
+/// Helper function to parse slide count from app.xml content
+fn parse_slides_from_app_xml(xml_content: &str) -> Result<usize, EstimatorError> {
+    let mut reader = XmlReader::from_str(xml_content);
+    reader.config_mut().trim_text(true);
+    let mut buf = Vec::new();
+    let mut in_slides = false;
+    
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(ref e)) | Ok(Event::Empty(ref e)) => {
+                if e.name().as_ref() == b"Slides" {
+                    in_slides = true;
+                }
+            }
+            Ok(Event::Text(e)) => {
+                if in_slides {
+                    let text = e.unescape()
+                        .map_err(|e| EstimatorError::General(format!("XML unescape error: {:?}", e)))?;
+                    let slide_count = text.parse::<usize>()
+                        .map_err(|e| EstimatorError::General(format!("Failed to parse slide count: {:?}", e)))?;
+                    return Ok(slide_count);
+                }
+            }
+            Ok(Event::End(ref e)) => {
+                if e.name().as_ref() == b"Slides" {
+                    in_slides = false;
+                }
+            }
+            Ok(Event::Eof) => break,
+            Err(e) => return Err(EstimatorError::General(format!("XML parse error: {:?}", e))),
+            _ => {}
+        }
+        buf.clear();
+    }
+    
+    Err(EstimatorError::General("No slide count found in app.xml".to_string()))
+}
+
+/// Fallback: estimate DOCX pages by analyzing content structure
+fn estimate_docx_from_content(
+    archive: &mut ZipArchive<Cursor<&[u8]>>,
+    options: &EstimateOptions,
+) -> Result<EstimateResult, EstimatorError> {
+    // Try to read document.xml and count paragraph/page break elements
+    match archive.by_name("word/document.xml") {
+        Ok(mut file) => {
+            let mut contents = String::new();
+            file.read_to_string(&mut contents)
+                .map_err(|e| EstimatorError::General(format!("Failed to read document.xml: {:?}", e)))?;
+            
+            // Count explicit page breaks
+            let page_breaks = contents.matches("<w:br w:type=\"page\"").count();
+            
+            // If there are page breaks, use that count + 1 (for the first page)
+            let estimated_pages = if page_breaks > 0 {
+                page_breaks + 1
+            } else {
+                // Fallback: estimate based on paragraph count
+                let paragraphs = contents.matches("<w:p ").count() + contents.matches("<w:p>").count();
+                let paragraphs_per_page = 25; // rough heuristic
+                ((paragraphs + paragraphs_per_page - 1) / paragraphs_per_page).max(1)
+            };
+            
+            let (w, h) = if let Some(custom) = options.custom_paper_mm {
+                custom
+            } else if let Some(ref def) = options.default_paper {
+                match def.as_str() {
+                    "Letter" | "letter" => letter_mm(),
+                    _ => a4_mm(),
+                }
+            } else {
+                a4_mm()
+            };
+            
+            Ok(EstimateResult {
+                page_count: estimated_pages,
+                page_sizes: vec![PageSizeMm { width_mm: w, height_mm: h }; estimated_pages],
+                notes: vec![
+                    format!("DOCX document estimated at {} pages (from content analysis)", estimated_pages),
+                    "Note: Page count estimated from content structure; may not be exact".to_string(),
+                ],
+            })
+        }
+        Err(e) => Err(EstimatorError::General(format!("Failed to read DOCX content: {:?}", e))),
+    }
+}
+
+/// Fallback: estimate PPTX slides by counting slide files
+fn estimate_pptx_from_content(
+    archive: &mut ZipArchive<Cursor<&[u8]>>,
+) -> Result<EstimateResult, EstimatorError> {
+    // Count slide files in ppt/slides/ directory
+    let mut slide_count = 0;
+    for i in 0..archive.len() {
+        if let Ok(file) = archive.by_index(i) {
+            let name = file.name();
+            if name.starts_with("ppt/slides/slide") && name.ends_with(".xml") {
+                slide_count += 1;
+            }
+        }
+    }
+    
+    if slide_count == 0 {
+        return Err(EstimatorError::General("No slides found in PPTX".to_string()));
+    }
+    
+    let (w, h) = (254.0, 190.5); // Standard PowerPoint dimensions
+    
+    Ok(EstimateResult {
+        page_count: slide_count,
+        page_sizes: vec![PageSizeMm { width_mm: w, height_mm: h }; slide_count],
+        notes: vec![
+            format!("PPTX presentation has {} slides (counted from files)", slide_count),
         ],
     })
 }
