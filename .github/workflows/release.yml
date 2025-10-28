@@ -1,0 +1,111 @@
+name: Build and Release WASM Module
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'  # Trigger on version tags like v1.0.0
+  workflow_dispatch:  # Allow manual triggering
+
+permissions:
+  contents: write  # Required to create releases and upload assets
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          target: wasm32-unknown-unknown
+          override: true
+          profile: minimal
+
+      - name: Install wasm-pack
+        run: cargo install wasm-pack
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install npm dependencies
+        run: npm install
+
+      - name: Build WASM module for web target
+        run: wasm-pack build --target web
+
+      - name: Verify build output
+        run: |
+          echo "Checking pkg directory contents..."
+          ls -la pkg/
+          echo "Build completed successfully!"
+
+      - name: Create release archive
+        run: |
+          cd pkg
+          zip -r ../page-counter-wasm-pkg.zip .
+          cd ..
+          echo "Archive created: page-counter-wasm-pkg.zip"
+          ls -lh page-counter-wasm-pkg.zip
+
+      - name: Generate release notes
+        id: release_notes
+        run: |
+          cat << EOF > release_notes.md
+          ## Page Counter WASM Build
+          
+          This release includes the compiled WebAssembly module for page counting functionality.
+          
+          ### What's included:
+          - ✅ WASM module built for web target
+          - ✅ TypeScript definitions
+          - ✅ JavaScript bindings
+          - ✅ PDF.js integration via npm (pdfjs-dist)
+          
+          ### Supported formats:
+          - PDF (using embedded PDF.js)
+          - XLSX (Excel)
+          - DOCX (Word)
+          - PPTX (PowerPoint)
+          - TXT (Plain text)
+          - Markdown
+          
+          ### Usage:
+          1. Download and extract \`page-counter-wasm-pkg.zip\`
+          2. Import in your web project:
+             \`\`\`javascript
+             import init, { estimate_document } from './path-to-pkg/page_counter_wasm.js';
+             await init();
+             \`\`\`
+          3. See the README for detailed usage instructions
+          
+          ### Build Info:
+          - Built on: $(date -u +'%Y-%m-%d %H:%M:%S UTC')
+          - Rust version: $(rustc --version)
+          - wasm-pack version: $(wasm-pack --version)
+          EOF
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: page-counter-wasm-pkg.zip
+          body_path: release_notes.md
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload artifact (for workflow dispatch)
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: page-counter-wasm-pkg
+          path: page-counter-wasm-pkg.zip
+          retention-days: 30
+
